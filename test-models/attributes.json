@@ -1,100 +1,100 @@
 {
  "objects": [
   {
-   "plot_weight": 0.34999999999999998, 
-   "url": "https://example.org/fence", 
-   "plot_color_source": 1, 
-   "name": "Grouped", 
-   "hatch_boundary": false, 
-   "display_order": 3, 
-   "viewport": "00000000-0000-0000-0000-000000000000", 
-   "plot_weight_source": 1, 
-   "linetype_scale": 2.0, 
-   "custom_linetype": null, 
-   "hatch_background": null, 
+   "plot_weight": 0.34999999999999998,
+   "url": "https://example.org/fence",
+   "plot_color_source": 1,
+   "name": "Grouped",
+   "hatch_boundary": false,
+   "display_order": 3,
+   "viewport": "00000000-0000-0000-0000-000000000000",
+   "plot_weight_source": 1,
+   "linetype_scale": 2.0,
+   "custom_linetype": null,
+   "hatch_background": null,
    "groups": [
-    0, 
+    0,
     1
-   ], 
+   ],
    "plot_color": [
-    10, 
-    20, 
+    10,
+    20,
     30
    ]
-  }, 
+  },
   {
-   "plot_weight": 0.0, 
-   "url": null, 
-   "plot_color_source": 0, 
-   "name": "Own linetype", 
-   "hatch_boundary": false, 
-   "display_order": 0, 
-   "viewport": "00000000-0000-0000-0000-000000000000", 
-   "plot_weight_source": 0, 
-   "linetype_scale": 1.0, 
+   "plot_weight": 0.0,
+   "url": null,
+   "plot_color_source": 0,
+   "name": "Own linetype",
+   "hatch_boundary": false,
+   "display_order": 0,
+   "viewport": "00000000-0000-0000-0000-000000000000",
+   "plot_weight_source": 0,
+   "linetype_scale": 1.0,
    "custom_linetype": [
-    4.0, 
+    4.0,
     -1.0
-   ], 
-   "hatch_background": null, 
-   "groups": [], 
+   ],
+   "hatch_background": null,
+   "groups": [],
    "plot_color": [
-    0, 
-    0, 
+    0,
+    0,
     0
    ]
-  }, 
+  },
   {
-   "plot_weight": 0.0, 
-   "url": null, 
-   "plot_color_source": 0, 
-   "name": "Filled hatch", 
-   "hatch_boundary": true, 
-   "display_order": 0, 
-   "viewport": "00000000-0000-0000-0000-000000000000", 
-   "plot_weight_source": 0, 
-   "linetype_scale": 1.0, 
-   "custom_linetype": null, 
+   "plot_weight": 0.0,
+   "url": null,
+   "plot_color_source": 0,
+   "name": "Filled hatch",
+   "hatch_boundary": true,
+   "display_order": 0,
+   "viewport": "00000000-0000-0000-0000-000000000000",
+   "plot_weight_source": 0,
+   "linetype_scale": 1.0,
+   "custom_linetype": null,
    "hatch_background": [
-    200, 
-    220, 
-    255, 
+    200,
+    220,
+    255,
     0
-   ], 
-   "groups": [], 
+   ],
+   "groups": [],
    "plot_color": [
-    0, 
-    0, 
+    0,
+    0,
     0
    ]
-  }, 
+  },
   {
-   "plot_weight": 0.0, 
-   "url": null, 
-   "plot_color_source": 0, 
-   "name": "Top only", 
-   "hatch_boundary": false, 
-   "display_order": 0, 
-   "viewport": "00000000-0000-0000-0000-000000000000", 
-   "plot_weight_source": 0, 
-   "linetype_scale": 1.0, 
-   "custom_linetype": null, 
-   "hatch_background": null, 
-   "groups": [], 
+   "plot_weight": 0.0,
+   "url": null,
+   "plot_color_source": 0,
+   "name": "Top only",
+   "hatch_boundary": false,
+   "display_order": 0,
+   "viewport": "00000000-0000-0000-0000-000000000000",
+   "plot_weight_source": 0,
+   "linetype_scale": 1.0,
+   "custom_linetype": null,
+   "hatch_background": null,
+   "groups": [],
    "plot_color": [
-    0, 
-    0, 
+    0,
+    0,
     0
    ]
   }
- ], 
+ ],
  "groups": [
   {
-   "name": "Fence", 
+   "name": "Fence",
    "index": 0
-  }, 
+  },
   {
-   "name": "North side", 
+   "name": "North side",
    "index": 1
   }
  ]

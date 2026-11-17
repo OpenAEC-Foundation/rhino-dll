@@ -232,7 +232,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             v["geometry"] = geometry_json(&o.geometry);
             Ok(v)
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object)")),    }
+        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object)")),
+    }
 }
 
 fn c_string(v: &Value) -> *mut c_char {
