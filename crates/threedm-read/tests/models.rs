@@ -168,6 +168,17 @@ fn texts_are_as_large_as_in_rhino() {
         _ => false,
     }).count();
     assert_eq!((kinds("Curve"), kinds("Text"), kinds("Hatch")), (7, 6, 5));
+    // a grid is lines both ways, a plus pattern dashes both ways (the second line family's
+    // offset is in its own frame)
+    for name in ["Grid", "Plus"] {
+        let object = file.objects.iter().find(|o| o.attributes.name == name).unwrap();
+        let Geometry::Lines(lines, _) = &object.geometry else { panic!("{name} is not drawn in lines") };
+        let along = |horizontal: bool| lines.iter().filter(|l| {
+            let d = l[l.len() - 1] - l[0];
+            if horizontal { d.y.abs() < 1e-9 && d.x.abs() > 1e-9 } else { d.x.abs() < 1e-9 && d.y.abs() > 1e-9 }
+        }).count();
+        assert!(along(true) > 3 && along(false) > 3, "{name}: {} across, {} up", along(true), along(false));
+    }
     // Rhino's outlines of the texts: x and y from and to
     let rhino = [
         ("Text 1", [0.1097, -12.0170, 8.1377, -10.9966]),

@@ -215,8 +215,10 @@ impl Hatch {
         for line in &pattern.lines {
             let dir = turn(DVec2::from_angle(line.angle));
             let base = turn(line.base * self.scale);
-            let offset = turn(line.offset * self.scale);
             let normal = dir.perp();
+            // the offset from one line to the next is in the line's own frame: along it and
+            // across it
+            let offset = (dir * line.offset.x + normal * line.offset.y) * self.scale;
             // the spacing across the lines; along them the offset shifts the dashes
             let across = offset.dot(normal);
             if !(across.abs() > 1e-12) {

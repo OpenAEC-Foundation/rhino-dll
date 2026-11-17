@@ -416,6 +416,10 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
     let geometry = match object {
         Some(object) => {
             user.extend(user_strings_of(&object.userdata));
+            if object.class == ON_TEXT_DOT {
+                // its text, shown with its point
+                user.extend(text_dot_text(object.data.clone()).unwrap_or_default());
+            }
             match read_geometry(object, object_type, vertices, drafting) {
                 Ok(geometry) => geometry,
                 Err(e) if e == TOO_MANY_VERTICES => Geometry::Skipped("meshes beyond the vertex limit"),
@@ -596,6 +600,11 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         }
         return Ok(Geometry::Points { points, colors, kind: "Point cloud" });
     }
+    if class == ON_TEXT_DOT {
+        // a label Rhino draws in screen pixels: its point, its text in the properties
+        c.version()?;
+        return Ok(Geometry::Points { points: c.take(24)?, colors: None, kind: "Text dot" });
+    }
     if class == ON_POINT {
         c.version()?;
         return Ok(Geometry::Points { points: c.take(24)?, colors: None, kind: "Point" });
@@ -655,6 +664,27 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         0x40000 => "SubD objects (no mesh in the file)",
         _ => "other objects",
     }))
+}
+
+/// `ON_TextDot`: a label at a point, drawn by Rhino in screen pixels.
+const ON_TEXT_DOT: Uuid = Uuid::parse("74198302-CDF4-4f95-9609-6D684F22AB37");
+
+/// The texts of an `ON_TextDot`, as properties: its text and its second text (on hovering).
+fn text_dot_text(mut c: Cur<'_>) -> R<Vec<(String, String)>> {
+    let (_, minor) = c.version()?;
+    c.take(24)?; // the point
+    c.i32()?; // height in points
+    let text = c.wstring()?;
+    c.wstring()?; // font
+    c.i32()?; // display bits
+    let mut out = vec![("Text".to_string(), text)];
+    if minor >= 1 {
+        let secondary = c.wstring()?;
+        if !secondary.is_empty() {
+            out.push(("Secondary text".to_string(), secondary));
+        }
+    }
+    Ok(out)
 }
 
 /// At most this many mesh vertices are read from a file: compressed arrays could otherwise
@@ -947,5 +977,20 @@ mod tests {
         let area: f64 = m.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).length()).sum();
         assert!((area - 1.0).abs() < 1e-9, "{area}");
         assert_eq!(c.left(), 0, "the whole record is read");
+    }
+
+    /// A text dot (`ON_TextDot` 1.1): its point, drawn as a point, and its two texts as
+    /// properties.
+    #[test]
+    fn text_dots_are_points_with_their_text() {
+        let w = W { big: true };
+        let data = cat(&[&[0x11], &f64s(&[1.0, 2.0, 3.0]), &i32b(12), &wstr("A1"), &wstr("Arial"), &i32b(0), &wstr("Grid A, 1")]);
+        let bytes = w.object(ON_TEXT_DOT, &data, &[]);
+        let mut c = Cur { data: &bytes, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
+        let object = c.object().unwrap().unwrap();
+        assert_eq!(text_dot_text(object.data.clone()).unwrap(), [("Text".to_string(), "A1".to_string()), ("Secondary text".to_string(), "Grid A, 1".to_string())]);
+        let drafting = Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001 };
+        let Geometry::Points { points, kind, .. } = read_geometry(object, 0x2000, &mut 0, &drafting).unwrap() else { panic!("not a point") };
+        assert_eq!((points, kind), (&f64s(&[1.0, 2.0, 3.0])[..], "Text dot"));
     }
 }
