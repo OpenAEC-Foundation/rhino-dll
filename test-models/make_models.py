@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Test models for the open-3d-viewer Rhino reader: every file is written WITHOUT render
+"""Test models for the Rhino reader of Open BIM Suite: every file is written WITHOUT render
 meshes, so the viewer has to mesh the exact geometry itself. Run in Rhino with the environment
 variable MODELS_OUT set to the output folder."""
 import os
