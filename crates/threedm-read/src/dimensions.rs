@@ -17,6 +17,16 @@ pub(super) const ON_DIM_ORDINATE: Uuid = Uuid::parse("03124828-4C9B-4D28-9A82-66
 pub(super) const ON_CENTERMARK: Uuid = Uuid::parse("D46767BA-7E8F-4D9D-9A92-66050219A5B9");
 pub(super) const ON_LEADER: Uuid = Uuid::parse("945BF594-6FF9-4F5C-BFC0-B3AF528F29D2");
 
+/// Rhino 4 and 5 annotations (`ON_OBSOLETE_V5_*`): texts, dimensions and leaders.
+pub(super) const V5_ANNOTATIONS: [Uuid; 6] = [
+    Uuid::parse("BD57F33B-A1B2-46e9-9C6E-AF09D30FFDDE"), // linear
+    Uuid::parse("B2B683FC-7964-4e96-B1F9-9B356A76B08B"), // radial
+    Uuid::parse("841BC40B-A971-4a8e-94E5-BBA26D67348E"), // angular
+    Uuid::parse("46F75541-F46B-48be-AA7E-B353BBE068A7"), // text
+    Uuid::parse("14922B7A-5B65-4f11-8345-D415A9637129"), // leader
+    Uuid::parse("C8288D69-5BD8-4f50-9BAF-525A0086B0C3"), // ordinate
+];
+
 /// At most this many points of a leader are drawn.
 const MAX_LEADER_POINTS: usize = 1000;
 
@@ -254,6 +264,17 @@ impl<'f> Pen<'f> {
         format!("{}{:.*}{}", st.prefix, st.length_resolution as usize, shown, st.suffix)
     }
 
+    /// The angle in the dimension's text: without a degree sign of its own when the text has
+    /// one after the value already (as Rhino 5 writes it).
+    fn angle_text(&self, text: &str, radians: f64) -> String {
+        let value = self.angle(radians);
+        if text.contains("<>\u{b0}") {
+            self.value_text(text, value.trim_end_matches('\u{b0}').to_string())
+        } else {
+            self.value_text(text, value)
+        }
+    }
+
     fn angle(&self, radians: f64) -> String {
         format!("{:.*}\u{b0}", self.style.angle_resolution as usize, radians.to_degrees())
     }
@@ -379,7 +400,7 @@ impl<'f> Pen<'f> {
         let gap = st.text_gap * self.s;
         let up = self.readable(along).perp();
         let v = if up.dot(radial) >= 0.0 { 5 } else { 0 };
-        let shown = self.value_text(text, self.angle(span));
+        let shown = self.angle_text(text, span);
         self.text(&shown, at + radial * gap, along, 1, v);
     }
 
@@ -462,6 +483,29 @@ impl<'f> Pen<'f> {
         self.text(&shown, first + read * gap + up * gap, dir, 0, 5);
     }
 
+    /// A Rhino 5 ordinate as Rhino 9 draws it: along the measured line from `def` to `kinks[0]
+    /// + kinks[1]` before the leader's end, slanting to `kinks[0]` before it, on to it, and the
+    /// value after it.
+    fn ordinate_bent(&mut self, text: &str, def: DVec2, leader: DVec2, kinks: [f64; 2]) {
+        let st = self.style.clone();
+        let run = leader - def;
+        let (value, along) = if run.x.abs() >= run.y.abs() { (def.y, DVec2::X) } else { (def.x, DVec2::Y) };
+        let dir = if run.dot(along) < 0.0 { -along } else { along };
+        let across = dir.perp();
+        let start = def + dir * st.ext_offset * self.s;
+        let reach = (leader - def).dot(dir);
+        let first = def + dir * (reach - kinks[0] - kinks[1]).max(0.0);
+        let second = def + dir * (reach - kinks[0]).max(0.0) + across * (leader - def).dot(across);
+        self.line(start, first);
+        self.line(first, second);
+        self.line(second, leader);
+        let gap = st.text_gap * self.s;
+        let shown = self.value_text(text, self.length(value.abs()));
+        let read = self.readable(dir);
+        let h = if read.dot(dir) > 0.0 { 0 } else { 2 };
+        self.text(&shown, leader + dir * gap, dir, h, 3);
+    }
+
     /// `ON_Leader`: a line through `points` (in the plane) with an arrowhead at the first, the
     /// landing and the text at the last.
     fn leader(&mut self, text: &str, points: &[DVec2]) {
@@ -483,6 +527,134 @@ impl<'f> Pen<'f> {
         let gap = st.text_gap * self.s;
         self.text(text, end + tail * gap, tail, if tail.x > 0.0 { 0 } else { 2 }, 1);
     }
+}
+
+/// `ON_OBSOLETE_V5_Annotation::Read`: a text, dimension or leader of Rhino 4 and 5, drawn as
+/// those of Rhino 6 and later are: its type, plane, points (in its plane), text, style (by
+/// index) and text height.
+pub(super) fn read_v5(c: &mut Cur<'_>, styles: &[DimStyle], font: &[u8], meters: f64) -> R<Drawing> {
+    // the annotation is in a chunk from late Rhino 4 on, else after a version byte; a
+    // dimension, leader or text may wrap it in chunks of its own (an ordinate always does)
+    let in_chunk = c.v.archive >= 5 && c.v.opennurbs >= 200_710_180;
+    let mut chunk = c.clone();
+    // the chunks around it, for what a kind adds after the annotation
+    let mut around = Vec::new();
+    while chunk.peek_typecode() == Some(TCODE_ANONYMOUS_CHUNK) {
+        let inner = chunk.versioned(TCODE_ANONYMOUS_CHUNK)?.0;
+        around.push(chunk);
+        chunk = inner;
+    }
+    if !in_chunk {
+        chunk.version()?;
+    }
+    let b = &mut chunk;
+    let kind = b.u32()?;
+    b.u32()?; // text display mode
+    let point3 = |b: &mut Cur<'_>| -> R<DVec3> { Ok(DVec3::new(b.f64()?, b.f64()?, b.f64()?)) };
+    let origin = point3(b)?;
+    let x = point3(b)?;
+    let y = point3(b)?;
+    b.take(24 + 32)?; // z axis, equation
+    let n = b.count(16)?;
+    let points = (0..n).map(|_| point2(b)).collect::<R<Vec<_>>>()?;
+    let text = b.wstring()?;
+    b.u32()?;
+    let style_index = b.i32()?;
+    let height = b.f64()?;
+    let justification = b.u32().unwrap_or(0);
+    if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
+        return super::err("an annotation with an invalid plane");
+    }
+    let mut style = styles.iter().find(|s| s.index == style_index).or(styles.first()).cloned().unwrap_or_default();
+    if height.is_finite() && height > 0.0 {
+        style.height = height;
+    }
+    // Rhino 5 justification: 1 left, 2 centre, 4 right; 0x10000 bottom, 0x20000 middle, 0x40000 top
+    let h_align = if justification & 2 != 0 { 1 } else if justification & 4 != 0 { 2 } else { 0 };
+    let v_align = if justification & 0x40000 != 0 { 0 } else if justification & 0x20000 != 0 { 3 } else { 5 };
+    let text = super::drafting::plain_text(&text);
+    let a = Annotation { text, rotation: 0.0, h_align, v_align, style: Uuid::default(), origin, x, y, kind, own_style: Some(style), allow_scaling: false };
+    let mut pen = Pen::new(&a, styles, font, meters);
+    let p = |k: usize| points.get(k).copied();
+    let no_flip = Head { use_default_text_point: true, user_text_point: DVec2::ZERO, flip_arrows: [false; 2] };
+    match kind {
+        // linear and aligned: the first extension line's end, the arrow tips and the second
+        1 | 2 => {
+            let (Some(e0), Some(a0), Some(e1)) = (p(0), p(1), p(2)) else { return super::err("a dimension without its points") };
+            pen.origin = pen.at(e0);
+            pen.linear(&a.text, &no_flip, e1 - e0, a0 - e0);
+            Ok(pen.done("Dimension"))
+        }
+        // angular: around the plane's origin from the second point to the third, the arc through
+        // the fourth, the text at its middle; as Rhino 9 converts them, the extension lines start at
+        // those points (Rhino 5) or at the centre (Rhino 4)
+        3 => {
+            let (Some(start), Some(v0), Some(v1), Some(arc)) = (p(0), p(1), p(2), p(3)) else { return super::err("a dimension without its points") };
+            let offsets = if in_chunk { [v0.length(), v1.length()] } else { [start.length(); 2] };
+            pen.angular(&a.text, &no_flip, [v0, v1], offsets, arc);
+            Ok(pen.done("Dimension"))
+        }
+        // diameter and radius: centre, arrow tip, tail and knee
+        4 | 5 => {
+            let (Some(centre), Some(tip), Some(tail)) = (p(0), p(1), p(2)) else { return super::err("a dimension without its points") };
+            pen.origin = pen.at(centre);
+            pen.radial(&a.text, kind == 4, tip - centre, tail - centre);
+            Ok(pen.done("Dimension"))
+        }
+        6 => {
+            pen.leader(&a.text, &points);
+            Ok(pen.done("Leader"))
+        }
+        // an ordinate: the point measured and the leader's end; after the annotation, the
+        // direction and the two kink offsets
+        8 => {
+            let (Some(def), Some(leader)) = (p(0), p(1)) else { return super::err("a dimension without its points") };
+            let stored = around.last_mut().and_then(|c| {
+                c.i32().ok()?;
+                Some([c.f64().ok()?, c.f64().ok()?])
+            });
+            // as openNURBS converts them: offsets below a tenth of the text height become the
+            // text height and half of it, within the length of the leader
+            let k = pen.style.height * pen.s;
+            let [mut k1, mut k2] = stored.unwrap_or([0.0; 2]).map(|v| if v.is_finite() { v } else { 0.0 });
+            if k1 < k / 10.0 {
+                k1 = k;
+            }
+            if k2 < k / 10.0 {
+                k2 = k / 2.0;
+            }
+            let dist = def.distance(leader);
+            if k1 > dist - 0.05 {
+                k1 = dist * 2.0 / 3.0;
+            }
+            if k2 > dist - k1 {
+                k2 = (dist - k1) / 2.0;
+            }
+            pen.ordinate_bent(&a.text, def, leader, [k1, k2]);
+            Ok(pen.done("Dimension"))
+        }
+        _ => {
+            // a text: at the plane's origin, as justified
+            let h = style_height(&pen);
+            let mesh = super::drafting::set_text(&a.text, origin, pen.x, pen.y, h, h_align, v_align, font);
+            Ok(Drawing { lines: Vec::new(), meshes: mesh.into_iter().collect(), kind: "Text" })
+        }
+    }
+}
+
+fn style_height(pen: &Pen<'_>) -> f64 {
+    pen.style.height * pen.s
+}
+
+/// `ON_OBSOLETE_V2_TextDot`: a Rhino 2 text dot.
+pub(super) const V2_TEXT_DOT: Uuid = Uuid::parse("8BD94E19-59E1-11d4-8018-0010830122F0");
+
+/// The point (24 bytes, as stored) and text of a Rhino 2 text dot.
+pub(super) fn read_v2_text_dot<'a>(c: &mut Cur<'a>) -> R<(&'a [u8], String)> {
+    c.version()?;
+    let point = c.take(24)?;
+    let text = c.wstring()?;
+    Ok((point, text))
 }
 
 #[cfg(test)]

@@ -133,7 +133,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 Ok(())
             }),
             TCODE_DIMSTYLE_TABLE => table(body, TCODE_DIMSTYLE_RECORD, &mut r, "dimension styles", |mut c, f| {
-                if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_DIM_STYLE) {
+                if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_DIM_STYLE || o.class == drafting::ON_V5X_DIM_STYLE) {
                     f.drafting.dim_styles.extend(drafting::read_dim_style(object.data)?);
                 }
                 Ok(())
@@ -430,6 +430,11 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
                 // its text, shown with its point
                 user.extend(text_dot_text(object.data.clone()).unwrap_or_default());
             }
+            if object.class == dimensions::V2_TEXT_DOT {
+                if let Ok((_, text)) = dimensions::read_v2_text_dot(&mut object.data.clone()) {
+                    user.push(("Text".to_string(), text));
+                }
+            }
             match read_geometry(object, object_type, vertices, drafting) {
                 Ok(geometry) => geometry,
                 Err(e) if e == TOO_MANY_VERTICES => Geometry::Skipped("meshes beyond the vertex limit"),
@@ -649,6 +654,19 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
                 }
             }
             Err(_) => Geometry::Skipped("hatches that could not be read"),
+        });
+    }
+    if dimensions::V5_ANNOTATIONS.contains(&class) {
+        return Ok(match dimensions::read_v5(&mut c, &d.dim_styles, d.font.unwrap_or(&[]), d.meters) {
+            Ok(drawing) if drawing.kind == "Text" => Geometry::Meshes(drawing.meshes, "Text"),
+            Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
+            Err(_) => Geometry::Skipped("Rhino 5 annotations that could not be read"),
+        });
+    }
+    if class == dimensions::V2_TEXT_DOT {
+        return Ok(match dimensions::read_v2_text_dot(&mut c) {
+            Ok((points, _)) => Geometry::Points { points, colors: None, kind: "Text dot" },
+            Err(_) => Geometry::Skipped("text dots that could not be read"),
         });
     }
     if dimensions::is_annotation(class) {

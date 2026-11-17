@@ -58,7 +58,9 @@ fn every_model_reads_whole() {
         let file = read(&data).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(file.damaged.is_empty(), "{}: {:?}", path.display(), file.damaged);
         assert!(!file.objects.is_empty(), "{}", path.display());
-        assert_eq!(file.versions.archive, 90, "{}", path.display());
+        // Rhino 9 files, and one saved by it as Rhino 5
+        let rhino5 = path.file_stem().is_some_and(|s| s.to_string_lossy().ends_with("_v5"));
+        assert_eq!(file.versions.archive, if rhino5 { 50 } else { 90 }, "{}", path.display());
     }
 }
 
@@ -291,4 +293,55 @@ fn curves_take_their_linetype() {
     assert!(circle.len() > 8, "{} pieces", circle.len());
     let around = std::f64::consts::PI * 30.0;
     assert!((drawn(&circle) - around / 2.0).abs() < 0.05 * around, "{} of {around}", drawn(&circle));
+}
+
+/// The dimensions and leaders of `dimensions.3dm` saved by Rhino 9 as a Rhino 5 file
+/// (`dimensions_v5.3dm`: Rhino 4 and 5 annotations and dimension styles), against what Rhino 9
+/// draws of that file (`dimensions_v5.json`, ids and 3d points): every line of Rhino's (arrowheads
+/// aside) is one of ours, and the texts of the dimensions sit where Rhino's do.
+#[test]
+fn rhino5_dimensions_are_drawn_as_in_rhino() {
+    let data = load("dimensions_v5.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("dimensions_v5.json")).unwrap()).unwrap();
+    let close = |p: DVec3, q: &serde_json::Value| (0..3).all(|k| (p[k] - q[k].as_f64().unwrap()).abs() < 0.05);
+    let mut wrong = Vec::new();
+    for (id, rhino) in reference.as_object().unwrap() {
+        let Some(object) = file.objects.iter().find(|o| o.attributes.id.to_string().eq_ignore_ascii_case(id)) else {
+            wrong.push(format!("{id}: not read"));
+            continue;
+        };
+        let Geometry::Drawing { lines, meshes, kind } = &object.geometry else {
+            wrong.push(format!("{id}: not drawn"));
+            continue;
+        };
+        for line in rhino["lines"].as_array().unwrap() {
+            let (a, b) = (&line[0], &line[1]);
+            if a == b {
+                continue;
+            }
+            if !lines.iter().any(|l| (close(l[0], a) && close(l[l.len() - 1], b)) || (close(l[0], b) && close(l[l.len() - 1], a))) {
+                wrong.push(format!("{id} {kind}: no line from {a} to {b}"));
+            }
+        }
+        // the texts of the dimensions (Rhino turns the text of a straight Rhino 5 leader along it)
+        if *kind != "Dimension" {
+            continue;
+        }
+        let (mut low, mut high) = (DVec3::MAX, DVec3::MIN);
+        for p in meshes.iter().filter(|m| m.positions.len() > 24).flat_map(|m| &m.positions) {
+            let p = DVec3::from(p.map(f64::from));
+            low = low.min(p);
+            high = high.max(p);
+        }
+        for t in rhino["texts"].as_array().unwrap() {
+            let b: Vec<f64> = t["box"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            let mid = DVec3::new((b[0] + b[3]) / 2.0, (b[1] + b[4]) / 2.0, (b[2] + b[5]) / 2.0);
+            let ours = (low + high) / 2.0;
+            if ours.distance(mid) > 0.8 {
+                wrong.push(format!("{id}: text {} at {mid}, ours at {ours}", t["text"]));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

@@ -17,6 +17,8 @@ pub(super) const ON_HATCH: Uuid = Uuid::parse("0559733B-5332-49d1-A936-0532AC76A
 pub(super) const ON_HATCH_PATTERN: Uuid = Uuid::parse("064E7C91-35F6-4734-A446-79FF7CD659E1");
 pub(super) const ON_TEXT: Uuid = Uuid::parse("57376349-62A9-4A16-B411-A46BCD544790");
 pub(super) const ON_DIM_STYLE: Uuid = Uuid::parse("67AA51A5-791D-4BEC-8AED-D23B462B6F87");
+/// The dimension style of Rhino 4 and 5 (`ON_V5x_DimStyle`).
+pub(super) const ON_V5X_DIM_STYLE: Uuid = Uuid::parse("81BD83D5-7120-41c4-9A57-C449336FF12C");
 
 /// Most characters of one text drawn.
 const MAX_TEXT: usize = 10_000;
@@ -289,6 +291,8 @@ impl Hatch {
 #[derive(Debug, Clone)]
 pub(super) struct DimStyle {
     pub(super) id: Uuid,
+    /// Its index (Rhino 5 annotations refer to their style by it).
+    pub(super) index: i32,
     pub(super) height: f64,
     pub(super) scale: f64,
     /// Extension lines: how far they run past the dimension line, and their gap to the points
@@ -328,6 +332,7 @@ impl Default for DimStyle {
     fn default() -> Self {
         DimStyle {
             id: Uuid::default(),
+            index: -1,
             height: 1.0,
             scale: 1.0,
             ext_extension: 0.125,
@@ -359,7 +364,7 @@ impl Default for DimStyle {
 /// length display. `None` for older files.
 pub(super) fn read_dim_style(mut c: Cur<'_>) -> R<Option<DimStyle>> {
     if c.v.archive < 60 {
-        return Ok(None);
+        return read_v5_dim_style(&mut c).map(Some);
     }
     let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
     if major != 1 {
@@ -397,6 +402,78 @@ pub(super) fn read_dim_style(mut c: Cur<'_>) -> R<Option<DimStyle>> {
     d.length_resolution = d.length_resolution.clamp(0, 10);
     d.angle_resolution = d.angle_resolution.clamp(0, 10);
     Ok(Some(d))
+}
+
+/// `ON_V5x_DimStyle::Read`: a dimension style of Rhino 4 and 5.
+fn read_v5_dim_style(c: &mut Cur<'_>) -> R<DimStyle> {
+    let (major, minor) = c.version()?;
+    if major < 1 {
+        return err("a dimension style of an unknown version");
+    }
+    let mut d = DimStyle { index: c.i32()?, ..DimStyle::default() };
+    c.wstring()?; // name
+    d.ext_extension = c.f64()?;
+    d.ext_offset = c.f64()?;
+    d.arrow = c.f64()?;
+    d.leader_arrow = d.arrow;
+    d.centermark = c.f64()?;
+    d.text_gap = c.f64()?;
+    // V5_TextDisplayMode: in the line when 1, 3 or 4, else above it
+    d.text_location = if matches!(c.u32()?, 1 | 3 | 4) { 1 } else { 0 };
+    let arrow = v5_arrow(c.u32()?);
+    d.arrows = [arrow, arrow];
+    d.leader_arrow_type = arrow;
+    c.u32()?; // angular units
+    c.u32()?; // length format
+    c.u32()?; // angle format
+    d.length_resolution = c.i32()?.clamp(0, 10);
+    d.angle_resolution = c.i32()?.clamp(0, 10);
+    c.i32()?; // text style
+    if minor >= 1 {
+        d.height = c.f64()?;
+    }
+    // what openNURBS gives a Rhino 5 style
+    d.landing = d.height;
+    if minor >= 2 {
+        d.length_factor = c.f64()?;
+        d.prefix = c.wstring()?;
+        d.suffix = c.wstring()?;
+        c.bool()?; // alternate units
+        c.f64()?;
+        c.take(4 * 4)?;
+        c.wstring()?;
+        c.wstring()?;
+        c.i32()?;
+    }
+    if minor >= 3 {
+        d.id = c.uuid()?;
+    }
+    if minor >= 4 {
+        d.dim_extension = c.f64()?;
+    }
+    if minor >= 5 {
+        d.leader_arrow = c.f64()?;
+        d.leader_arrow_type = v5_arrow(c.u32()?);
+        d.suppress_extension = [c.bool()?, c.bool()?];
+    }
+    if !(d.length_factor.is_finite() && d.length_factor > 0.0) {
+        d.length_factor = 1.0;
+    }
+    Ok(d)
+}
+
+/// A Rhino 5 arrowhead kind as `ON_Arrowhead::arrow_type`.
+fn v5_arrow(v5: u32) -> u32 {
+    match v5 {
+        1 => 3, // dot
+        2 => 4, // tick
+        3 => 5, // short triangle
+        4 => 6, // open arrow
+        5 => 7, // rectangle
+        6 => 8, // long triangle
+        7 => 9, // longer triangle
+        _ => 2, // solid triangle
+    }
 }
 
 /// The fields of `ON_DimStyle::Read` after the text height.
@@ -500,9 +577,9 @@ fn dim_style_rest(b: &mut Cur<'_>, minor: i32, d: &mut DimStyle) -> R<()> {
 /// its text, plane, style and the style of its own.
 pub(super) struct Annotation {
     pub(super) text: String,
-    rotation: f64,
-    h_align: u32,
-    v_align: u32,
+    pub(super) rotation: f64,
+    pub(super) h_align: u32,
+    pub(super) v_align: u32,
     pub(super) style: Uuid,
     pub(super) origin: DVec3,
     pub(super) x: DVec3,
