@@ -523,7 +523,7 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
         c.i32()?; // wire density
         a.mode = c.u8()? % 16;
         a.color_source = c.u8()?;
-        c.u8()?; // line type source
+        a.linetype_source = c.u8()?;
         a.material_source = c.u8()?;
         a.name = c.wstring()?;
         c.wstring()?; // url
@@ -534,20 +534,26 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
             if minor >= 2 {
                 a.visible = c.bool()?;
             }
-            if minor >= 6 {
-                // display material references (1.3), decoration and plot colour and weight (1.4),
-                // line type (1.5), then the space (1.6): 1 for a layout. A short record keeps
-                // model space.
-                let mut space = || -> R<u8> {
+            // display material references (1.3), decoration and plot colour and weight (1.4),
+            // the linetype (1.5), then the space (1.6): 1 for a layout. A short record keeps
+            // what it has.
+            let mut rest = || -> R<()> {
+                if minor >= 3 {
                     let n = c.count(32)?;
                     c.take(32 * n)?;
-                    c.take(4 + 1 + 4 + 1 + 8 + 4)?;
-                    c.u8()
-                };
-                if matches!(space(), Ok(1)) {
+                }
+                if minor >= 4 {
+                    c.take(4 + 1 + 4 + 1 + 8)?;
+                }
+                if minor >= 5 {
+                    a.linetype = c.i32()?;
+                }
+                if minor >= 6 && c.u8()? == 1 {
                     a.space = 2;
                 }
-            }
+                Ok(())
+            };
+            let _ = rest();
         }
     }
     Ok(a)
