@@ -88,6 +88,9 @@ pub enum Geometry<'a> {
     Points { points: &'a [u8], colors: Option<&'a [u8]>, kind: &'static str },
     /// Polylines (curves, and the lines of text and hatches) and the object type to show.
     Lines(Vec<Vec<DVec3>>, &'static str),
+    /// Lines and filled shapes together, and the object type to show: dimensions and leaders
+    /// (their lines; their arrowheads and text as meshes).
+    Drawing { lines: Vec<Vec<DVec3>>, meshes: Vec<Mesh>, kind: &'static str },
     /// Not drawn: why, for the count in the project information.
     Skipped(&'static str),
 }

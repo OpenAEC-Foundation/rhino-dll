@@ -252,6 +252,7 @@ dependencies = [
 name = "threedm-ffi"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "serde_json",
  "threedm-read",
 ]
@@ -271,6 +272,7 @@ dependencies = [
  "earcutr",
  "flate2",
  "glam",
+ "serde_json",
  "spade",
  "threedm-core",
  "threedm-model",

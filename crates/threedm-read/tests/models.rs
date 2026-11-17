@@ -194,3 +194,63 @@ fn texts_are_as_large_as_in_rhino() {
         assert!((mid.x - (x0 + x1) / 2.0).abs() < 0.15 * w && (mid.y - (y0 + y1) / 2.0).abs() < 0.15 * h, "{name}: around {mid}");
     }
 }
+
+/// Dimensions and leaders (`dimensions.3dm`, from make_dimensions.py) as Rhino 9 draws them:
+/// `dimensions.json` holds what Rhino makes of each when exploded. Every line of Rhino's
+/// (arrowheads aside) has one of ours with the same ends, and each text covers Rhino's text box
+/// (in Inter, so a little narrower or wider than Rhino's Arial).
+#[test]
+fn dimensions_and_leaders_are_drawn_as_in_rhino() {
+    let data = load("dimensions.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("dimensions.json")).unwrap()).unwrap();
+    let near = |p: DVec3, q: &serde_json::Value, d: f64| (p.x - q[0].as_f64().unwrap()).abs() < d && (p.y - q[1].as_f64().unwrap()).abs() < d;
+    let mut wrong = Vec::new();
+    for (name, rhino) in reference.as_object().unwrap() {
+        let Some(object) = file.objects.iter().find(|o| &o.attributes.name == name) else {
+            wrong.push(format!("{name}: not read"));
+            continue;
+        };
+        let Geometry::Drawing { lines, meshes, .. } = &object.geometry else {
+            wrong.push(format!("{name}: not drawn ({:?})", std::mem::discriminant(&object.geometry)));
+            continue;
+        };
+        // an ordinate's line runs on as far as its text, which is set in another font
+        let d = if name.starts_with("Ordinate") { 0.3 } else { 0.02 };
+        let close = |p: DVec3, q: &serde_json::Value| near(p, q, d);
+        for line in rhino["lines"].as_array().unwrap().iter().filter_map(|l| l.as_array()) {
+            let (a, b) = (&line[0], &line[line.len() - 1]);
+            if a == b {
+                continue; // an arrowhead
+            }
+            let found = lines.iter().any(|l| {
+                let (p, q) = (l[0], l[l.len() - 1]);
+                (close(p, a) && close(q, b)) || (close(p, b) && close(q, a))
+            });
+            if !found {
+                wrong.push(format!("{name}: no line from {a} to {b}"));
+            }
+        }
+        // the text: the meshes of more than a few points (arrowheads have at most 16)
+        let (mut low, mut high) = (DVec3::MAX, DVec3::MIN);
+        for p in meshes.iter().filter(|m| m.positions.len() > 24).flat_map(|m| &m.positions) {
+            let p = DVec3::from(p.map(f64::from));
+            low = low.min(p);
+            high = high.max(p);
+        }
+        for t in rhino["texts"].as_array().unwrap() {
+            let b: Vec<f64> = t["box"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            let (w, h) = (b[2] - b[0], b[3] - b[1]);
+            let (mid_x, mid_y) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+            let size = high - low;
+            let mid = (low + high) / 2.0;
+            // a text turned a quarter round is as wide as it is long
+            let (ours_w, ours_h) = (size.x, size.y);
+            let ok = (mid.x - mid_x).abs() < 0.3 && (mid.y - mid_y).abs() < 0.3 && (ours_w - w).abs() < 0.25 * w.max(h) && (ours_h - h).abs() < 0.25 * w.max(h);
+            if !ok {
+                wrong.push(format!("{name}: text {} at {mid_x:.2}, {mid_y:.2}, {w:.2} by {h:.2}; ours at {:.2}, {:.2}, {:.2} by {:.2}", t["text"], mid.x, mid.y, ours_w, ours_h));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

@@ -13,4 +13,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 threedm-read.workspace = true
+glam.workspace = true
 serde_json.workspace = true

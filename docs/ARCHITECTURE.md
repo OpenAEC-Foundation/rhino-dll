@@ -27,7 +27,8 @@ the layers, materials and block definitions, the objects, and the records that c
 read by table. Each `Object` has its `Attributes` (id, name, layer, material, colour and their
 sources, visibility, mode and space), its user text and its `Geometry`: `Meshes` (with the
 object type to show), `Lines` (polylines), `Points` (borrowed from the file, read when used),
-`Instance` (block definition and transform) or `Skipped` (with the reason).
+`Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions
+and leaders) or `Skipped` (with the reason).
 
 ## threedm-read: from tables to geometry
 
@@ -47,6 +48,10 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
 - texts and hatches (`drafting`): texts set in a font at their dimension style's text height
   times its model space scale, rich text reduced to plain text; hatches filled, or drawn in their
   pattern's lines cut to their loops and dashed;
+- dimensions, centre marks and leaders (`dimensions`), from the points openNURBS stores in the
+  annotation's plane and their dimension style (read in full: sizes, formats, arrowheads, landing,
+  text location, length display): extension lines, dimension lines and arcs, arrowheads, the
+  value set in the font; one `Geometry::Drawing` of lines and meshes per object;
 - point clouds, points and block instances as they are.
 
 Limits: at most `MAX_VERTICES` mesh vertices are read from a file and at most 120 000 SubD faces

@@ -281,50 +281,145 @@ impl Hatch {
 // ---------------------------------------------------------------------------------------------
 // Text
 
-/// A dimension style: its id (texts refer to it by), its text height and its model space
-/// scale (texts that allow it are drawn that many times their height in model views).
+/// A dimension style: its id (texts and dimensions refer to it by), its text height and its
+/// model space scale (annotations that allow it are drawn that many times as large in model
+/// views), and how dimensions and leaders are drawn.
 #[derive(Debug, Clone)]
 pub(super) struct DimStyle {
     pub(super) id: Uuid,
     pub(super) height: f64,
     pub(super) scale: f64,
+    /// Extension lines: how far they run past the dimension line, and their gap to the points
+    /// measured.
+    pub(super) ext_extension: f64,
+    pub(super) ext_offset: f64,
+    /// Arrowhead lengths of dimensions and of leaders.
+    pub(super) arrow: f64,
+    pub(super) leader_arrow: f64,
+    /// Half the size of the cross at a centre.
+    pub(super) centermark: f64,
+    /// The gap between text and lines.
+    pub(super) text_gap: f64,
+    pub(super) angle_resolution: i32,
+    pub(super) length_resolution: i32,
+    pub(super) length_factor: f64,
+    pub(super) prefix: String,
+    pub(super) suffix: String,
+    /// How far the dimension line runs past the extension lines.
+    pub(super) dim_extension: f64,
+    pub(super) suppress_extension: [bool; 2],
+    pub(super) suppress_arrow: [bool; 2],
+    /// `ON_Arrowhead::arrow_type` of the two ends of a dimension and of a leader.
+    pub(super) arrows: [u32; 2],
+    pub(super) leader_arrow_type: u32,
+    pub(super) has_landing: bool,
+    pub(super) landing: f64,
+    /// 0 above the dimension line, 1 in it, 2 below it.
+    pub(super) text_location: u32,
+    /// `ON_DimStyle::LengthDisplay`: 0 model units, 3 mm, 4 cm, 5 m, 6 km, 7 and 1 inches, 8 and
+    /// 2 feet.
+    pub(super) length_display: u32,
 }
 
-/// `ON_DimStyle::Read` (Rhino 6 and later): the model component attributes (with the id), then
-/// the text height among the first numbers and the model space scale further on. `None` for
-/// older files.
+impl Default for DimStyle {
+    /// `ON_DimStyle::Default`, for what a file does not say.
+    fn default() -> Self {
+        DimStyle {
+            id: Uuid::default(),
+            height: 1.0,
+            scale: 1.0,
+            ext_extension: 0.125,
+            ext_offset: 0.0625,
+            arrow: 0.125,
+            leader_arrow: 0.125,
+            centermark: 0.125,
+            text_gap: 0.03125,
+            angle_resolution: 0,
+            length_resolution: 2,
+            length_factor: 1.0,
+            prefix: String::new(),
+            suffix: String::new(),
+            dim_extension: 0.0,
+            suppress_extension: [false; 2],
+            suppress_arrow: [false; 2],
+            arrows: [2, 2],
+            leader_arrow_type: 2,
+            has_landing: false,
+            landing: 0.125,
+            text_location: 0,
+            length_display: 0,
+        }
+    }
+}
+
+/// `ON_DimStyle::Read` (Rhino 6 and later): the model component attributes (with the id), the
+/// sizes, then as far as the file holds them the formats, arrows, landing, text location and
+/// length display. `None` for older files.
 pub(super) fn read_dim_style(mut c: Cur<'_>) -> R<Option<DimStyle>> {
     if c.v.archive < 60 {
         return Ok(None);
     }
-    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
     if major != 1 {
         return Ok(None);
     }
+    // ReadModelComponentAttributes: each attribute after a byte saying whether it is there
     let (mut attributes, _, _) = b.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK)?;
-    let bits = attributes.u32()?;
-    let id = if bits & 1 != 0 { attributes.uuid()? } else { Uuid::default() };
-    b.take(6 * 8)?; // extension, offset, arrow sizes, centre mark, text gap
-    let height = b.f64()?;
-    Ok(Some(DimStyle { id, height, scale: dim_scale(&mut b).ok().filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0) }))
+    if attributes.u8()? == 1 {
+        attributes.take(12)?; // serial numbers
+    }
+    let id = if attributes.u8()? == 1 { attributes.uuid()? } else { Uuid::default() };
+    let mut d = DimStyle { id, ..DimStyle::default() };
+    d.ext_extension = b.f64()?;
+    d.ext_offset = b.f64()?;
+    d.arrow = b.f64()?;
+    d.leader_arrow = b.f64()?;
+    d.centermark = b.f64()?;
+    d.text_gap = b.f64()?;
+    d.height = b.f64()?;
+    // the rest as far as it reads: what could not be read keeps its default
+    let _ = dim_style_rest(&mut b, minor, &mut d);
+    let size = |v: f64, default: f64| if v.is_finite() && v >= 0.0 { v } else { default };
+    let defaults = DimStyle::default();
+    d.ext_extension = size(d.ext_extension, defaults.ext_extension);
+    d.ext_offset = size(d.ext_offset, defaults.ext_offset);
+    d.arrow = size(d.arrow, defaults.arrow);
+    d.leader_arrow = size(d.leader_arrow, defaults.leader_arrow);
+    d.centermark = size(d.centermark, defaults.centermark);
+    d.text_gap = size(d.text_gap, defaults.text_gap);
+    d.dim_extension = size(d.dim_extension, 0.0);
+    d.landing = size(d.landing, defaults.landing);
+    if !(d.length_factor.is_finite() && d.length_factor > 0.0) {
+        d.length_factor = 1.0;
+    }
+    d.length_resolution = d.length_resolution.clamp(0, 10);
+    d.angle_resolution = d.angle_resolution.clamp(0, 10);
+    Ok(Some(d))
 }
 
-/// The fields of `ON_DimStyle::Read` after the text height, up to its model space scale.
-fn dim_scale(b: &mut Cur<'_>) -> R<f64> {
-    for _ in 0..6 {
-        b.u32()?; // text alignment, angle format, length format, resolutions, text style
+/// The fields of `ON_DimStyle::Read` after the text height.
+fn dim_style_rest(b: &mut Cur<'_>, minor: i32, d: &mut DimStyle) -> R<()> {
+    b.u32()?; // text alignment (of Rhino 5)
+    b.u32()?; // angle format
+    b.u32()?; // length format (of Rhino 5)
+    d.angle_resolution = b.i32()?;
+    d.length_resolution = b.i32()?;
+    b.i32()?; // text style
+    d.length_factor = b.f64()?;
+    if minor <= 5 {
+        // Rhino 6 files before the length display: openNURBS takes the factor as 1
+        d.length_factor = 1.0;
     }
-    b.f64()?; // length factor
     b.bool()?; // alternate units
     b.f64()?; // their length factor
     b.u32()?; // their format
-    b.u32()?; // their resolution
-    for _ in 0..4 {
-        b.wstring()?; // prefix and suffix, for both
-    }
-    b.f64()?; // extension
-    b.bool()?; // suppress extension 1
-    b.bool()?; // and 2
+    b.i32()?; // their resolution
+    d.prefix = b.wstring()?;
+    d.suffix = b.wstring()?;
+    b.wstring()?; // alternate prefix
+    b.wstring()?; // and suffix
+    d.dim_extension = b.f64()?;
+    d.suppress_extension = [b.bool()?, b.bool()?];
     b.uuid()?; // parent style
     b.u32()?; // unused
     if b.bool()? {
@@ -332,12 +427,129 @@ fn dim_scale(b: &mut Cur<'_>) -> R<f64> {
         b.take(n)?; // which fields override the parent's
     }
     b.u32()?; // tolerance format
-    b.u32()?; // its resolution
+    b.i32()?; // its resolution
     b.take(4 * 8)?; // its upper and lower values and height, baseline spacing
     b.bool()?; // text mask
     b.u32()?; // its type
     b.u32()?; // its colour
-    b.f64()
+    let scale = b.f64()?;
+    if scale.is_finite() && scale > 0.0 {
+        d.scale = scale;
+    }
+    b.i32()?; // where the scale comes from
+    b.uuid()?; // source style
+    b.take(4 + 16 + 4 + 16)?; // colour sources and colours, for display and print
+    b.take(2 + 3 * 8)?; // print weight sources and weights, fixed extension length
+    b.bool()?; // fixed extension length on
+    b.f64()?; // text rotation
+    b.i32()?; // alternate tolerance resolution
+    b.f64()?; // tolerance text height
+    d.suppress_arrow = [b.bool()?, b.bool()?];
+    b.i32()?; // text moves leader
+    b.i32()?; // arc length symbol
+    b.f64()?; // stacked text height
+    b.i32()?; // stack format
+    b.take(3 * 8)?; // rounding
+    b.take(4 * 4)?; // zero suppression
+    b.bool()?; // alternate below
+    d.arrows = [b.u32()?, b.u32()?];
+    d.leader_arrow_type = b.u32()?;
+    if minor <= 0 {
+        return Ok(());
+    }
+    b.take(3 * 16)?; // arrow blocks
+    b.take(3 * 4)?; // (of Rhino 5) text and leader vertical alignment
+    b.take(2 * 4)?; // leader content angle style and curve type
+    b.f64()?; // leader content angle
+    d.has_landing = b.bool()?;
+    d.landing = b.f64()?;
+    b.take(2 * 4)?; // (of Rhino 5) text and leader horizontal alignment
+    b.bool()?; // draw forward
+    b.bool()?; // signed ordinates
+    b.chunk()?; // scale value
+    b.u32()?; // unit system
+    if minor <= 1 {
+        return Ok(());
+    }
+    b.chunk()?; // font
+    if minor <= 2 {
+        return Ok(());
+    }
+    b.chunk()?; // text mask
+    if minor <= 3 {
+        return Ok(());
+    }
+    d.text_location = b.u32()?;
+    b.u32()?; // of radial dimensions
+    b.take(10 * 4)?; // alignments, orientations and angle styles
+    b.bool()?; // underlined
+    if minor <= 4 {
+        return Ok(());
+    }
+    b.take(2 * 4)?;
+    if minor <= 5 {
+        return Ok(());
+    }
+    d.length_display = b.u32()?;
+    Ok(())
+}
+
+/// What an annotation holds before what its kind adds (`ON_Annotation::Internal_ReadAnnotation`):
+/// its text, plane, style and the style of its own.
+pub(super) struct Annotation {
+    pub(super) text: String,
+    rotation: f64,
+    h_align: u32,
+    v_align: u32,
+    pub(super) style: Uuid,
+    pub(super) origin: DVec3,
+    pub(super) x: DVec3,
+    pub(super) y: DVec3,
+    /// `ON::AnnotationType`: 3 a diameter, 4 a radius, ..
+    pub(super) kind: u32,
+    /// A dimension style of its own (overriding fields of its style).
+    pub(super) own_style: Option<DimStyle>,
+    pub(super) allow_scaling: bool,
+}
+
+/// `ON_Annotation::Internal_ReadAnnotation`: the chunk at `c`.
+pub(super) fn read_annotation(c: &mut Cur<'_>) -> R<Annotation> {
+    let (mut a, _, version) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let (mut content, _, _) = a.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let rich = content.wstring()?;
+    content.take(4 * 24 + 32)?; // the obsolete plane
+    content.f64()?; // rectangle width
+    let rotation = content.f64()?;
+    let h_align = content.u32()?;
+    let v_align = content.u32()?;
+    let style = a.uuid()?;
+    let point = |c: &mut Cur<'_>| -> R<DVec3> { Ok(DVec3::new(c.f64()?, c.f64()?, c.f64()?)) };
+    let origin = point(&mut a)?;
+    let x = point(&mut a)?;
+    let y = point(&mut a)?;
+    a.take(24 + 32)?; // z axis, equation
+    let mut kind = 0;
+    let mut own_style = None;
+    let mut allow_scaling = true;
+    if version >= 1 {
+        kind = a.u32()?;
+    }
+    if version >= 2 {
+        let (mut overrides, _, _) = a.versioned(TCODE_ANONYMOUS_CHUNK)?;
+        if overrides.bool()? {
+            if let Some(o) = overrides.object()?.filter(|o| o.class == ON_DIM_STYLE) {
+                own_style = read_dim_style(o.data).ok().flatten();
+            }
+        }
+    }
+    if version >= 4 {
+        a.take(16)?; // horizontal direction (2d)
+        allow_scaling = a.bool()?;
+    }
+    if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
+        return err("an annotation with an invalid plane");
+    }
+    Ok(Annotation { text: plain_text(&rich), rotation: if rotation.is_finite() { rotation } else { 0.0 }, h_align, v_align, style, origin, x, y, kind, own_style, allow_scaling })
 }
 
 /// A text: its plain text, plane, height (when it overrides its style's), style, rotation and
@@ -356,54 +568,26 @@ pub(super) struct Text {
     rotation: f64,
     /// 0 left, 1 centre, 2 right.
     h_align: u32,
-    /// 0 top, 1 and 2 middle and bottom of the top line, 3 middle, 4 to 6 bottom.
+    /// `ON::TextVerticalAlignment`: 0 top, 1 and 2 middle and bottom of the top line, 3 middle,
+    /// 4 and 5 middle and bottom of the bottom line, 6 bottom of the bounding box.
     v_align: u32,
 }
 
 /// `ON_Text::Read`: `ON_Annotation::Internal_ReadAnnotation` with its `ON_TextContent`.
 pub(super) fn read_text(c: &mut Cur<'_>) -> R<Text> {
     let (mut outer, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
-    let (mut a, _, version) = outer.versioned(TCODE_ANONYMOUS_CHUNK)?;
-    let (mut content, _, _) = a.versioned(TCODE_ANONYMOUS_CHUNK)?;
-    let rich = content.wstring()?;
-    content.take(4 * 24 + 32)?; // the obsolete plane
-    content.f64()?; // rectangle width
-    let rotation = content.f64()?;
-    let h_align = content.u32()?;
-    let v_align = content.u32()?;
-    let style = a.uuid()?;
-    let point = |c: &mut Cur<'_>| -> R<DVec3> { Ok(DVec3::new(c.f64()?, c.f64()?, c.f64()?)) };
-    let origin = point(&mut a)?;
-    let x = point(&mut a)?;
-    let y = point(&mut a)?;
-    a.take(24 + 32)?; // z axis, equation
-    let mut height = None;
-    let mut scale = None;
-    if version >= 1 {
-        a.u32()?; // annotation type
-    }
-    if version >= 2 {
-        // a dimension style of its own
-        let (mut overrides, _, _) = a.versioned(TCODE_ANONYMOUS_CHUNK)?;
-        if overrides.bool()? {
-            if let Some(o) = overrides.object()?.filter(|o| o.class == ON_DIM_STYLE) {
-                if let Some(d) = read_dim_style(o.data).ok().flatten() {
-                    height = Some(d.height).filter(|h| h.is_finite() && *h > 0.0);
-                    scale = Some(d.scale);
-                }
-            }
-        }
-    }
-    if version >= 4 {
-        a.take(16)?; // horizontal direction (2d)
-        if !a.bool()? {
-            scale = Some(1.0);
-        }
-    }
-    if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
-        return err("a text with an invalid plane");
-    }
-    Ok(Text { text: plain_text(&rich), origin, x, y, style, height, scale, rotation: if rotation.is_finite() { rotation } else { 0.0 }, h_align, v_align })
+    let a = read_annotation(&mut outer)?;
+    let height = a.own_style.as_ref().map(|d| d.height).filter(|h| h.is_finite() && *h > 0.0);
+    let scale = if !a.allow_scaling { Some(1.0) } else { a.own_style.as_ref().map(|d| d.scale) };
+    Ok(Text { text: a.text, origin: a.origin, x: a.x, y: a.y, style: a.style, height, scale, rotation: a.rotation, h_align: a.h_align, v_align: a.v_align })
+}
+
+/// A text set in `font` with capitals `height` high, in the plane of `origin` reading along `x`
+/// with `y` up, aligned as Rhino aligns text: `h_align` 0 left, 1 centre, 2 right; `v_align`
+/// `ON::TextVerticalAlignment`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn set_text(text: &str, origin: DVec3, x: DVec3, y: DVec3, height: f64, h_align: u32, v_align: u32, font: &[u8]) -> Option<Mesh> {
+    Text { text: text.to_string(), origin, x, y, style: Uuid::default(), height: Some(height), scale: Some(1.0), rotation: 0.0, h_align, v_align }.mesh(None, font)
 }
 
 /// The plain text of rich text (RTF) as Rhino stores it: groups that hold no text (font and
@@ -598,9 +782,16 @@ impl Text {
         }
         // the block below or above its point, as aligned
         let below = (lines.len() - 1) as f64 * line_step;
+        let descent = -(face.descender() as f64) * scale;
+        // ON::TextVerticalAlignment: the point at the top, middle or baseline of the first line,
+        // the middle of the block, the middle or baseline of the last line, or below it all
         let dy = match self.v_align {
-            0..=2 => -height,
+            0 => -height,
+            1 => -height / 2.0,
+            2 => 0.0,
             3 => (below - height) / 2.0,
+            4 => below - height / 2.0,
+            6 => below + descent.max(0.0),
             _ => below,
         };
         let (sin, cos) = self.rotation.sin_cos();
