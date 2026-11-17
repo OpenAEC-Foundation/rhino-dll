@@ -191,6 +191,62 @@ pub struct View {
     pub height: f64,
 }
 
+/// What kind of light a [`Light`] is (`ON::light_style`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightKind {
+    /// Light from one direction, as of the sun.
+    Directional,
+    /// Light from a point in all directions.
+    Point,
+    /// Light from a point in a cone.
+    Spot,
+    /// Light from a line: from `location` along `length`.
+    Linear,
+    /// Light from a rectangle: at `location`, spanned by `length` and `width`.
+    Rectangular,
+    /// Light everywhere, from no direction.
+    Ambient,
+    /// A style openNURBS does not know.
+    Unknown,
+}
+
+/// A light (`ON_Light`) of the light table, with the layer and visibility of its attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Light {
+    pub id: Uuid,
+    pub name: String,
+    pub layer: i32,
+    pub visible: bool,
+    /// Switched on.
+    pub on: bool,
+    pub kind: LightKind,
+    /// Placed in camera coordinates (+x right, +y up, +z towards the camera) and moving with
+    /// the camera, not in world coordinates.
+    pub camera: bool,
+    /// The `ON::light_style` as stored.
+    pub style: i32,
+    pub location: DVec3,
+    /// Where it shines (not unit: a spot light's cone reaches as far).
+    pub direction: DVec3,
+    /// The sides of a linear or rectangular light.
+    pub length: DVec3,
+    pub width: DVec3,
+    pub ambient: [u8; 4],
+    pub diffuse: [u8; 4],
+    pub specular: [u8; 4],
+    /// 0 to 1.
+    pub intensity: f64,
+    pub watts: f64,
+    /// A spot light's half angle in degrees (0 to 90), its exponent and its hot spot (0 to 1),
+    /// as Rhino gives them (a light keeps one of the last two, the other follows from it).
+    pub spot_angle: f64,
+    pub spot_exponent: f64,
+    pub hotspot: f64,
+    /// Constant, linear and quadratic attenuation: the light falls off as 1/(a + b·d + c·d²).
+    pub attenuation: DVec3,
+    pub shadow_intensity: f64,
+}
+
 /// An object of the object table: its geometry, attributes and user text.
 #[derive(Debug, Clone)]
 pub struct Object<'a> {
@@ -217,6 +273,8 @@ pub struct File<'a> {
     pub named_views: Vec<View>,
     /// The group table: of each group its index and name.
     pub groups: Vec<(i32, String)>,
+    /// The lights of the light table (and of the object table, where old files keep them).
+    pub lights: Vec<Light>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

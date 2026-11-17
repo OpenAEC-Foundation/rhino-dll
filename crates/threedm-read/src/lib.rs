@@ -15,16 +15,19 @@
 //! ([`drafting`]); point clouds and points; block instances with their definition and transform.
 //! Meshes are read up to [`MAX_VERTICES`] vertices, so that a damaged or hostile file cannot
 //! exhaust memory. Clipping planes are read with their rectangle, plane and the viewports they
-//! clip, and the viewports of the file's views with them. Lights, layout details and objects the
-//! reader does not know are left out with the reason.
+//! clip, and the viewports of the file's views with them; lights with their kind, place, colour
+//! and attenuation ([`Light`]). Layout details and objects the reader does not know are left out
+//! with the reason.
 
 use glam::DVec3;
+use lights::{MAX_LIGHTS, TCODE_LIGHT_RECORD, TCODE_LIGHT_TABLE};
 use threedm_core::*;
-pub use threedm_model::{Attributes, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject, View};
+pub use threedm_model::{Attributes, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, Material, Mesh, Object as RhinoObject, View};
 
 mod dimensions;
 mod document;
 pub mod drafting;
+mod lights;
 pub mod subd;
 pub mod tessellate;
 mod v1;
@@ -157,7 +160,19 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 }
                 Ok(())
             }),
+            TCODE_LIGHT_TABLE => table(body, TCODE_LIGHT_RECORD, &mut r, "lights", |c, f| {
+                if f.file.lights.len() < MAX_LIGHTS {
+                    f.file.lights.extend(lights::read_light_record(c)?);
+                }
+                Ok(())
+            }),
             TCODE_OBJECT_TABLE => table(body, TCODE_OBJECT_RECORD, &mut r, "objects", |c, f| {
+                if let Some(light) = lights::read_object_light(c.clone())? {
+                    if f.file.lights.len() < MAX_LIGHTS {
+                        f.file.lights.push(light);
+                    }
+                    return Ok(());
+                }
                 f.drafting.meters = f.file.meters;
                 let mut object = read_object(c, &mut f.vertices, &f.drafting)?;
                 dash(&mut object, &f.file.layers, &f.drafting.linetypes);
