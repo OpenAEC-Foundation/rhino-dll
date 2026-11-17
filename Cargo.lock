@@ -269,6 +269,7 @@ name = "threedm-read"
 version = "0.1.0"
 dependencies = [
  "earcutr",
+ "flate2",
  "glam",
  "spade",
  "threedm-core",

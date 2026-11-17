@@ -849,3 +849,93 @@ fn read_extrusion(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, tessel
     let meshes = if meshes.is_empty() { Vec::new() } else { vec![meshes.swap_remove(k).1] };
     Ok((meshes, shape, minor))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::DVec3;
+    use std::io::Write;
+    use threedm_core::write::*;
+
+    /// An `ON_Mesh` 3.x of one triangle whose vertex array is `positions` (size, CRC, method and
+    /// bytes as `compressed` writes them), claiming `vcount` vertices.
+    fn mesh_with(vcount: i32, positions: &[u8]) -> Vec<u8> {
+        cat(&[&[0x30], &i32b(vcount), &i32b(1), &[0; 153], &i32b(4), &[0, 1, 2, 2].map(i32b).concat(), positions, &[0; 16]])
+    }
+
+    fn read_test_mesh(data: &[u8]) -> R<Mesh> {
+        let mut c = Cur { data, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
+        read_mesh(&mut c, &mut 0)
+    }
+
+    #[test]
+    fn compressed_arrays_are_checked_before_inflating() {
+        let w = W { big: true };
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(&vec![0; 1 << 20]).unwrap();
+        let zeros = z.finish().unwrap();
+        // a few kilobytes that claim almost 4 GiB for 3 vertices: not inflated
+        let bomb = cat(&[&0xFFFF_0000u32.to_le_bytes(), &[0; 4], &[1], &w.chunk(TCODE_ANONYMOUS_CHUNK, &zeros)]);
+        assert_eq!(read_test_mesh(&mesh_with(3, &bomb)).unwrap_err(), "Rhino 3dm: mesh vertices of the wrong size");
+        // a size that matches the vertex count but more than the stream can inflate to
+        let packed = cat(&[&(12u32 * 1_000_000).to_le_bytes(), &[0; 4], &[1], &w.chunk(TCODE_ANONYMOUS_CHUNK, &zeros[..64])]);
+        assert_eq!(read_test_mesh(&mesh_with(1_000_000, &packed)).unwrap_err(), "Rhino 3dm: compressed data larger than its stream can hold");
+        // more vertices than the viewer reads
+        assert_eq!(read_test_mesh(&mesh_with(i32::MAX, &bomb)).unwrap_err(), TOO_MANY_VERTICES);
+        // the well-formed mesh reads
+        let points = w.compressed(&[[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]].iter().flatten().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>(), true);
+        let mesh = read_test_mesh(&mesh_with(3, &points)).unwrap();
+        assert_eq!((mesh.positions.len(), mesh.triangles), (3, 1));
+        // no faces and a face index size that would overflow a 32-bit multiplication
+        let empty = cat(&[&[0x30], &i32b(3), &i32b(0), &[0; 153], &i32b(i32::MAX)]);
+        assert!(read_test_mesh(&empty).unwrap().faces.is_empty());
+    }
+
+    #[test]
+    fn user_text_counts_need_room_for_their_entries() {
+        // 1000 entries in 8000 bytes: each entry needs at least 16
+        let w = W { big: false };
+        let list = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&i32b(1000), &vec![0; 8000]]));
+        let c = Cur { data: &list, pos: 0, v: Versions { archive: 4, opennurbs: 0 } };
+        assert_eq!(user_strings(c).unwrap_err(), "Rhino 3dm: a count larger than its record");
+    }
+
+    /// A polysurface as Rhino 2 wrote it (`ON_Brep::ReadOld200`): its curves and surface inline,
+    /// its trims numbered in order. A unit square meshes into a face of area 1.
+    #[test]
+    fn rhino2_polysurfaces_are_read() {
+        let w = W { big: false };
+        let line_class = Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0");
+        // ON_PolyCurve inline, of one line
+        let poly = |a: [f64; 3], b: [f64; 3]| {
+            let line = cat(&[&[0x10], &f64s(&a), &f64s(&b), &f64s(&[0.0, 1.0]), &i32b(3)]);
+            cat(&[&[0x10], &i32b(1), &i32b(0), &i32b(0), &[0; 48], &i32b(2), &f64s(&[0.0, 1.0]), &w.object(line_class, &line, &[])])
+        };
+        let square = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut data = cat(&[&i32b(1), &i32b(4), &i32b(1), &i32b(4), &i32b(1), &[0; 48]]);
+        for k in 0..4 {
+            data.extend(poly(square[k], square[(k + 1) % 4])); // trims in the parameter plane
+        }
+        for k in 0..4 {
+            data.extend(poly(square[k], square[(k + 1) % 4])); // edges
+        }
+        // ON_NurbsSurface inline: a bilinear patch over the unit square, u along x
+        let cvs: Vec<f64> = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]].iter().flat_map(|[x, y]| [*x, *y, 0.0]).collect();
+        data.extend(cat(&[&[0x10], &i32b(3), &i32b(0), &i32b(2), &i32b(2), &i32b(2), &i32b(2), &i32b(0), &i32b(0), &[0; 48], &i32b(2), &f64s(&[0.0, 1.0]), &i32b(2), &f64s(&[0.0, 1.0]), &i32b(4), &f64s(&cvs)]));
+        // the face, its outer loop and its trims
+        data.extend(cat(&[&i32b(0), &i32b(0), &i32b(0), &i32b(0), &[0; 48], &i32b(1), &i32b(0), &i32b(0), &[0; 32], &i32b(4)]));
+        for k in 0..4 {
+            data.extend(cat(&[&i32b(k), &i32b(-1), &[1], &i32b(k), &i32b(0), &i32b(0), &i32b(0), &f64s(&[0.0, 0.0])]));
+        }
+        data.push(0); // no render mesh
+        let mut c = Cur { data: &data, pos: 0, v: Versions { archive: 2, opennurbs: 0 } };
+        let mut vertices = 0;
+        let (meshes, faces) = super::tessellate::brep_v2(&mut c, &mut vertices, &mut |_, _| Ok(None)).unwrap();
+        assert_eq!((meshes.len(), faces), (1, 1));
+        let m = &meshes[0];
+        let p = |i: u32| DVec3::from(m.positions[i as usize].map(f64::from));
+        let area: f64 = m.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).length()).sum();
+        assert!((area - 1.0).abs() < 1e-9, "{area}");
+        assert_eq!(c.left(), 0, "the whole record is read");
+    }
+}

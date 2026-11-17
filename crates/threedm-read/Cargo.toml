@@ -19,3 +19,6 @@ glam.workspace = true
 spade.workspace = true
 ttf-parser.workspace = true
 earcutr.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true

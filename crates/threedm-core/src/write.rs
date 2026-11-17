@@ -8,7 +8,8 @@ use std::io::Write;
 /// Writes 3dm archives as openNURBS does, for the parts the reader uses: chunks with 4- or
 /// 8-byte lengths (CRCs written as zero, the reader does not check them).
 pub struct W {
-    big: bool,
+    /// 8-byte chunk lengths (archive version 50 and later).
+    pub big: bool,
 }
 
 pub fn i32b(v: i32) -> Vec<u8> {
