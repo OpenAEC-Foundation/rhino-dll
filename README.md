@@ -1,7 +1,7 @@
-# 3dm-dll
+# rhino-dll
 
 Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
-[open-3d-viewer](https://github.com/OpenAEC-Foundation/open-bim-suite) and other tools.
+[Open BIM Suite](https://github.com/OpenAEC-Foundation/open-bim-suite) and other tools.
 
 **Status:** private, alpha. Reads every Rhino version from Rhino 2 to Rhino 9.
 
@@ -21,7 +21,7 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   and text).
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
-  layers) is up to the program that uses it; open-3d-viewer's Rhino loader is an example.
+  layers) is up to the program that uses it; Open BIM Suite's Rhino loader is an example.
 
 ## Crates
 
@@ -40,7 +40,7 @@ Crate names cannot start with a digit, hence `threedm-`.
 From Rust, as a git dependency:
 
 ```toml
-threedm-read = { git = "https://github.com/OpenAEC-Foundation/3dm-dll", rev = "…" }
+threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "…" }
 ```
 
 ```rust
@@ -102,7 +102,7 @@ commit models from others (McNeel's example files included) or exports derived f
 
 ## Licence
 
-LGPL-3.0-or-later, like open-3d-viewer, where this code started. The built-in font is Inter
+LGPL-3.0-or-later, like Open BIM Suite, where this code started. The built-in font is Inter
 (SIL Open Font License, `crates/threedm-read/fonts/Inter-LICENSE.txt`).
 
 Rhinoceros and openNURBS are trademarks of Robert McNeel & Associates. This project is not
