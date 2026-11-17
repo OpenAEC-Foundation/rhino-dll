@@ -462,6 +462,39 @@ fn read_v5_dim_style(c: &mut Cur<'_>) -> R<DimStyle> {
     Ok(d)
 }
 
+/// `ON_3dmAnnotationSettings::Read`: the annotation settings of a Rhino 2 or 3 document, as a
+/// dimension style.
+pub(super) fn read_annotation_settings(mut c: Cur<'_>) -> R<DimStyle> {
+    let (major, _) = c.version()?;
+    if major != 1 {
+        return err("annotation settings of an unknown version");
+    }
+    let mut d = DimStyle::default();
+    d.scale = c.f64()?;
+    d.height = c.f64()?;
+    d.ext_extension = c.f64()?;
+    d.ext_offset = c.f64()?;
+    d.arrow = c.f64()?;
+    d.leader_arrow = d.arrow;
+    c.f64()?; // arrow width
+    d.centermark = c.f64()?;
+    c.i32()?; // units
+    let arrow = v5_arrow(c.u32()?);
+    d.arrows = [arrow, arrow];
+    d.leader_arrow_type = arrow;
+    c.u32()?; // angular units
+    c.u32()?; // length format
+    c.u32()?; // angle format
+    c.i32()?; // (obsolete)
+    d.length_resolution = c.i32()?.clamp(0, 10);
+    d.text_gap = d.height / 4.0;
+    d.landing = d.height;
+    if !(d.scale.is_finite() && d.scale > 0.0) {
+        d.scale = 1.0;
+    }
+    Ok(d)
+}
+
 /// A Rhino 5 arrowhead kind as `ON_Arrowhead::arrow_type`.
 fn v5_arrow(v5: u32) -> u32 {
     match v5 {

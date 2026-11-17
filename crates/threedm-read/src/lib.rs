@@ -73,6 +73,8 @@ struct Drafting {
     font: Option<&'static [u8]>,
     /// Metres per model unit, for lengths shown in other units.
     meters: f64,
+    /// The document's annotation settings (Rhino 2 and 3), for annotations without a style.
+    document_style: Option<drafting::DimStyle>,
 }
 
 /// Reads a Rhino file: its tables, and its objects as meshes, polylines, points and block
@@ -87,7 +89,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     }
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
-    let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001 }, vertices: 0 };
+    let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001, document_style: None }, vertices: 0 };
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,
@@ -104,7 +106,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
         match chunk.typecode {
             TCODE_ENDOFFILE => break,
             TCODE_PROPERTIES_TABLE => read_properties(body, &mut r.file),
-            TCODE_SETTINGS_TABLE => read_settings(body, &mut r.file),
+            TCODE_SETTINGS_TABLE => read_settings(body, &mut r.file, &mut r.drafting),
             TCODE_MATERIAL_TABLE => table(body, TCODE_MATERIAL_RECORD, &mut r, "materials", |mut c, f| {
                 let index = f.file.materials.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == ON_MATERIAL) {
@@ -190,10 +192,20 @@ fn read_properties(mut c: Cur<'_>, file: &mut File<'_>) {
     }
 }
 
-fn read_settings(mut c: Cur<'_>, file: &mut File<'_>) {
+/// `TCODE_SETTINGS_ANNOTATION`: the annotation settings of the document (Rhino 2 and 3).
+const TCODE_SETTINGS_ANNOTATION: u32 = 0x2000_8034;
+
+/// The settings table: the units, and the document's annotation settings as a dimension style
+/// for annotations that name none (Rhino 2).
+fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
     while let Ok(chunk) = c.chunk() {
         match chunk.typecode {
             TCODE_ENDOFTABLE => break,
+            TCODE_SETTINGS_ANNOTATION => {
+                if let Ok(style) = drafting::read_annotation_settings(chunk.body) {
+                    drafting.document_style = Some(style);
+                }
+            }
             TCODE_SETTINGS_UNITSANDTOLS => {
                 if let Ok(Some((meters, unit))) = read_units(chunk.body) {
                     file.meters = meters;
@@ -654,6 +666,20 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
                 }
             }
             Err(_) => Geometry::Skipped("hatches that could not be read"),
+        });
+    }
+    if class == dimensions::V2_ARROW {
+        return Ok(match dimensions::read_v2_arrow(&mut c) {
+            Ok(line) => Geometry::Lines(vec![line], "Curve"),
+            Err(_) => Geometry::Skipped("Rhino 2 arrows that could not be read"),
+        });
+    }
+    if dimensions::V2_ANNOTATIONS.contains(&class) {
+        let style = d.document_style.clone().unwrap_or_default();
+        return Ok(match dimensions::read_v2(&mut c, &style, d.font.unwrap_or(&[]), d.meters) {
+            Ok(drawing) if drawing.kind == "Text" => Geometry::Meshes(drawing.meshes, "Text"),
+            Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
+            Err(_) => Geometry::Skipped("Rhino 2 annotations that could not be read"),
         });
     }
     if dimensions::V5_ANNOTATIONS.contains(&class) {
@@ -1127,7 +1153,7 @@ mod tests {
         let mut c = Cur { data: &bytes, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
         let object = c.object().unwrap().unwrap();
         assert_eq!(text_dot_text(object.data.clone()).unwrap(), [("Text".to_string(), "A1".to_string()), ("Secondary text".to_string(), "Grid A, 1".to_string())]);
-        let drafting = Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001 };
+        let drafting = Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001, document_style: None };
         let Geometry::Points { points, kind, .. } = read_geometry(object, 0x2000, &mut 0, &drafting).unwrap() else { panic!("not a point") };
         assert_eq!((points, kind), (&f64s(&[1.0, 2.0, 3.0])[..], "Text dot"));
     }

@@ -27,6 +27,15 @@ pub(super) const V5_ANNOTATIONS: [Uuid; 6] = [
     Uuid::parse("C8288D69-5BD8-4f50-9BAF-525A0086B0C3"), // ordinate
 ];
 
+/// Rhino 2 annotations (`ON_OBSOLETE_V2_*`): dimensions, texts and leaders.
+pub(super) const V2_ANNOTATIONS: [Uuid; 5] = [
+    Uuid::parse("5DE6B20D-486B-11d4-8014-0010830122F0"), // linear
+    Uuid::parse("5DE6B20E-486B-11d4-8014-0010830122F0"), // radial
+    Uuid::parse("5DE6B20F-486B-11d4-8014-0010830122F0"), // angular
+    Uuid::parse("5DE6B210-486B-11d4-8014-0010830122F0"), // text
+    Uuid::parse("5DE6B211-486B-11d4-8014-0010830122F0"), // leader
+];
+
 /// At most this many points of a leader are drawn.
 const MAX_LEADER_POINTS: usize = 1000;
 
@@ -529,6 +538,28 @@ impl<'f> Pen<'f> {
     }
 }
 
+/// `ON_OBSOLETE_V2_Annotation::Read`: a dimension, text or leader of Rhino 2 (and 3): type,
+/// plane, points and text as Rhino 4 and 5 have them, drawn in the document's annotation
+/// settings (`style`).
+pub(super) fn read_v2(c: &mut Cur<'_>, style: &DimStyle, font: &[u8], meters: f64) -> R<Drawing> {
+    let (major, _) = c.version()?;
+    if major != 1 {
+        return super::err("a Rhino 2 annotation of an unknown version");
+    }
+    let kind = c.u32()?;
+    let point3 = |b: &mut Cur<'_>| -> R<DVec3> { Ok(DVec3::new(b.f64()?, b.f64()?, b.f64()?)) };
+    let origin = point3(c)?;
+    let x = point3(c)?;
+    let y = point3(c)?;
+    c.take(24 + 32)?; // z axis, equation
+    let n = c.count(16)?;
+    let points = (0..n).map(|_| point2(c)).collect::<R<Vec<_>>>()?;
+    let user = c.wstring()?;
+    let default = c.wstring().unwrap_or_default();
+    let text = if user.is_empty() { default } else { user };
+    draw_v5(kind, origin, x, y, &points, &text, style.clone(), 0, false, None, font, meters)
+}
+
 /// `ON_OBSOLETE_V5_Annotation::Read`: a text, dimension or leader of Rhino 4 and 5, drawn as
 /// those of Rhino 6 and later are: its type, plane, points (in its plane), text, style (by
 /// index) and text height.
@@ -569,12 +600,29 @@ pub(super) fn read_v5(c: &mut Cur<'_>, styles: &[DimStyle], font: &[u8], meters:
     if height.is_finite() && height > 0.0 {
         style.height = height;
     }
+    // an ordinate's direction and kink offsets follow the annotation
+    let kinks = if kind == 8 {
+        around.last_mut().and_then(|c| {
+            c.i32().ok()?;
+            Some([c.f64().ok()?, c.f64().ok()?])
+        })
+    } else {
+        None
+    };
+    draw_v5(kind, origin, x, y, &points, &text, style, justification, in_chunk, kinks, font, meters)
+}
+
+/// Draws a Rhino 2, 4 or 5 annotation of `kind` (`V5_eAnnotationType`) from its plane, points
+/// and text in `style`, as Rhino 9 converts it. `rhino5` tells the angular extension lines'
+/// start (at the points, else at the centre); `kinks`, an ordinate's stored kink offsets.
+#[allow(clippy::too_many_arguments)]
+fn draw_v5(kind: u32, origin: DVec3, x: DVec3, y: DVec3, points: &[DVec2], text: &str, style: DimStyle, justification: u32, rhino5: bool, kinks: Option<[f64; 2]>, font: &[u8], meters: f64) -> R<Drawing> {
     // Rhino 5 justification: 1 left, 2 centre, 4 right; 0x10000 bottom, 0x20000 middle, 0x40000 top
     let h_align = if justification & 2 != 0 { 1 } else if justification & 4 != 0 { 2 } else { 0 };
     let v_align = if justification & 0x40000 != 0 { 0 } else if justification & 0x20000 != 0 { 3 } else { 5 };
-    let text = super::drafting::plain_text(&text);
+    let text = super::drafting::plain_text(text);
     let a = Annotation { text, rotation: 0.0, h_align, v_align, style: Uuid::default(), origin, x, y, kind, own_style: Some(style), allow_scaling: false };
-    let mut pen = Pen::new(&a, styles, font, meters);
+    let mut pen = Pen::new(&a, &[], font, meters);
     let p = |k: usize| points.get(k).copied();
     let no_flip = Head { use_default_text_point: true, user_text_point: DVec2::ZERO, flip_arrows: [false; 2] };
     match kind {
@@ -590,7 +638,7 @@ pub(super) fn read_v5(c: &mut Cur<'_>, styles: &[DimStyle], font: &[u8], meters:
         // those points (Rhino 5) or at the centre (Rhino 4)
         3 => {
             let (Some(start), Some(v0), Some(v1), Some(arc)) = (p(0), p(1), p(2), p(3)) else { return super::err("a dimension without its points") };
-            let offsets = if in_chunk { [v0.length(), v1.length()] } else { [start.length(); 2] };
+            let offsets = if rhino5 { [v0.length(), v1.length()] } else { [start.length(); 2] };
             pen.angular(&a.text, &no_flip, [v0, v1], offsets, arc);
             Ok(pen.done("Dimension"))
         }
@@ -602,17 +650,14 @@ pub(super) fn read_v5(c: &mut Cur<'_>, styles: &[DimStyle], font: &[u8], meters:
             Ok(pen.done("Dimension"))
         }
         6 => {
-            pen.leader(&a.text, &points);
+            pen.leader(&a.text, points);
             Ok(pen.done("Leader"))
         }
         // an ordinate: the point measured and the leader's end; after the annotation, the
         // direction and the two kink offsets
         8 => {
             let (Some(def), Some(leader)) = (p(0), p(1)) else { return super::err("a dimension without its points") };
-            let stored = around.last_mut().and_then(|c| {
-                c.i32().ok()?;
-                Some([c.f64().ok()?, c.f64().ok()?])
-            });
+            let stored = kinks;
             // as openNURBS converts them: offsets below a tenth of the text height become the
             // text height and half of it, within the length of the leader
             let k = pen.style.height * pen.s;
@@ -644,6 +689,21 @@ pub(super) fn read_v5(c: &mut Cur<'_>, styles: &[DimStyle], font: &[u8], meters:
 
 fn style_height(pen: &Pen<'_>) -> f64 {
     pen.style.height * pen.s
+}
+
+/// `ON_OBSOLETE_V2_AnnotationArrow`: a Rhino 2 arrow, from its tail to its head.
+pub(super) const V2_ARROW: Uuid = Uuid::parse("8BD94E1A-59E1-11d4-8018-0010830122F0");
+
+/// A Rhino 2 arrow: the line from its tail to its head, as Rhino 9 converts it (a curve).
+pub(super) fn read_v2_arrow(c: &mut Cur<'_>) -> R<Vec<DVec3>> {
+    c.version()?;
+    let point3 = |c: &mut Cur<'_>| -> R<DVec3> { Ok(DVec3::new(c.f64()?, c.f64()?, c.f64()?)) };
+    let tail = point3(c)?;
+    let head = point3(c)?;
+    if !(tail.is_finite() && head.is_finite()) {
+        return super::err("an arrow with an invalid point");
+    }
+    Ok(vec![tail, head])
 }
 
 /// `ON_OBSOLETE_V2_TextDot`: a Rhino 2 text dot.
