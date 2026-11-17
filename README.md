@@ -3,11 +3,11 @@
 Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
 [Open BIM Suite](https://github.com/OpenAEC-Foundation/open-bim-suite) and other tools.
 
-**Status:** private, alpha. Reads every Rhino version from Rhino 2 to Rhino 9.
+**Status:** private, alpha. Reads every Rhino version from Rhino 1 to Rhino 9.
 
 ## Scope
 
-- Input: `.3dm` files of Rhino 2 to 9 (archive versions 2, 3, 4, 5, 50, 60, 70, 80 and 90).
+- Input: `.3dm` files of Rhino 1 to 9 (archive versions 1, 2, 3, 4, 5, 50, 60, 70, 80 and 90).
 - Output: a neutral model (`threedm-model`): units, layers, materials, block definitions and
   objects with their attributes and user text, each object as meshes, polylines, points or a
   block instance. Exact geometry is meshed as Rhino meshes it on opening a file, so that files

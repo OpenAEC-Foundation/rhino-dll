@@ -42,6 +42,10 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   (constrained Delaunay), the edges two faces share are sampled once so that closed solids
   stay watertight, untrimmed faces take a structured grid, Rhino 2 polysurfaces are read in
   their own layout;
+- Rhino 1 files (`v1`, archive version 1): no tables but top-level chunks: layers, the unit
+  system and objects, each its geometry with its attributes (layer by index, colour, name):
+  compressed meshes, points (with their arrows and text dots), curves of NURBS segments and
+  faces and shells of trimmed NURBS surfaces, meshed as Breps are;
 - SubD objects by their limit surface (`subd`), Catmull–Clark with Rhino's sector coefficients
   and creases;
 - curves as polylines within Rhino's display tolerance;

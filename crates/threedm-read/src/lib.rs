@@ -26,6 +26,7 @@ mod document;
 pub mod drafting;
 pub mod subd;
 pub mod tessellate;
+mod v1;
 
 pub use document::Document;
 pub use threedm_core::{Uuid, Versions, R};
@@ -84,12 +85,14 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     let start = data.windows(MAGIC.len()).take(1 << 20).position(|w| w == MAGIC).ok_or("Rhino 3dm: not a Rhino file (no 3dm header)")?;
     let header = data.get(start..start + 32).ok_or("Rhino 3dm: the file is too short")?;
     let version: u32 = std::str::from_utf8(&header[24..32]).ok().and_then(|s| s.trim().parse().ok()).ok_or("Rhino 3dm: the header has no version")?;
-    if version < 2 {
-        return err("Rhino 1 files are not supported (save them from a newer Rhino)");
-    }
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
     let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001, document_style: None }, vertices: 0 };
+    if version < 2 {
+        // Rhino 1: top-level chunks of its own
+        v1::read(top, &mut r.file, &mut r.vertices)?;
+        return Ok(r.file);
+    }
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,

@@ -374,6 +374,99 @@ pub(super) fn read_curve_object(c: &mut Cur<'_>, depth: usize) -> R<Option<Curve
 
 /// A curve object as a polyline within the chord tolerance of its size; `None` when the class is
 /// not a curve the viewer reads.
+/// A NURBS surface from openNURBS's parts: orders, control point counts, knots (the first and
+/// last left out) and homogeneous control points, `count[1]` per row of u.
+pub(super) fn nurbs_surface(order: [usize; 2], count: [usize; 2], knots: [&[f64]; 2], cvs: Vec<[f64; 4]>) -> R<Surface> {
+    let mut full: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+    for d in 0..2 {
+        let k = knots[d];
+        if !(2..=MAX_ORDER).contains(&order[d]) || count[d] < order[d] || k.len() != order[d] + count[d] - 2 || k.windows(2).any(|w| !(w[1] >= w[0])) {
+            return err("a NURBS surface of an unknown form");
+        }
+        full[d].push(k[0]);
+        full[d].extend_from_slice(k);
+        full[d].push(k[k.len() - 1]);
+    }
+    if Some(cvs.len()) != count[0].checked_mul(count[1]) {
+        return err("a NURBS surface with the wrong number of control points");
+    }
+    finite(cvs.as_flattened())?;
+    let s = NurbsSurface { order, knots: full, count, cvs };
+    if s.domain().iter().any(|d| !(d[1] > d[0])) {
+        return err("a NURBS surface without a domain");
+    }
+    Ok(Surface::Nurbs(s))
+}
+
+/// A face of a Rhino 1 polysurface: its surface, whether it is reversed, and its loops (1
+/// outer, 2 inner, 3 slit) of trims.
+pub(super) struct LegacyFace {
+    pub(super) surface: Surface,
+    pub(super) reversed: bool,
+    pub(super) loops: Vec<(i32, Vec<LegacyTrim>)>,
+}
+
+/// A trim of a Rhino 1 face: its curve in the surface's parameters, the curve of its edge when
+/// it has one, and whether it runs against the edge.
+pub(super) struct LegacyTrim {
+    pub(super) curve: Curve,
+    pub(super) edge: Option<Curve>,
+    pub(super) against: bool,
+}
+
+/// Meshes of the faces of a Rhino 1 surface or polysurface (`size` across), one per face, as
+/// those of later polysurfaces are meshed. `vertices` counts the mesh vertices made so far.
+pub(super) fn legacy_brep(faces: Vec<LegacyFace>, size: f64, vertices: &mut usize) -> R<Vec<Mesh>> {
+    let mut parts = BrepParts { curves: Vec::new(), curves3: Vec::new(), surfaces: Vec::new(), points: Vec::new(), edges: Vec::new(), trims: Vec::new(), loops: Vec::new(), faces: Vec::new() };
+    for face in faces {
+        let surface = parts.surfaces.len() as i32;
+        parts.surfaces.push(Some(face.surface));
+        let mut face_loops = Vec::new();
+        for (kind, trims) in face.loops {
+            let mut loop_trims = Vec::new();
+            for t in trims {
+                let edge = match t.edge {
+                    Some(curve) => {
+                        let index = parts.edges.len() as i32;
+                        parts.edges.push(Edge { curve: parts.curves3.len() as i32, proxy: curve.domain(), reversed: false, vertices: [-1, -1] });
+                        parts.curves3.push(Some(curve));
+                        index
+                    }
+                    None => -1,
+                };
+                let index = parts.trims.len() as i32;
+                parts.trims.push(Trim { curve: parts.curves.len() as i32, proxy: t.curve.domain(), reversed: false, edge, against: t.against, vertices: [-1, -1] });
+                parts.curves.push(Some(t.curve));
+                loop_trims.push(index);
+            }
+            face_loops.push(parts.loops.len() as i32);
+            parts.loops.push(Loop { trims: loop_trims, kind });
+        }
+        parts.faces.push(Face { loops: face_loops, surface, reversed: face.reversed });
+    }
+    mesh_brep(&parts, size, &[], vertices)
+}
+
+/// Curves joined end to end, as an `ON_PolyCurve` of them: each takes the length of its own
+/// domain in the joined parameters.
+pub(super) fn poly_curve(mut segments: Vec<Curve>) -> R<Curve> {
+    if segments.len() <= 1 {
+        return segments.pop().ok_or_else(|| "a curve without segments".to_string());
+    }
+    let mut t = vec![segments[0].domain()[0]];
+    for s in &segments {
+        let d = s.domain();
+        t.push(t[t.len() - 1] + (d[1] - d[0]));
+    }
+    Ok(Curve::Poly { segments, t })
+}
+
+/// A NURBS curve from openNURBS's parts: its order, knots (the first and last left out) and
+/// homogeneous control points (x·w, y·w, z·w, w).
+pub(super) fn nurbs_curve(order: usize, knots: &[f64], cvs: Vec<[f64; 4]>) -> R<Curve> {
+    Ok(Curve::Nurbs(Nurbs::new(order, knots, cvs)?))
+}
+
 pub(super) fn curve_object(class: Uuid, c: &mut Cur<'_>) -> Option<Vec<DVec3>> {
     let curve = read_curve(class, c, 0).ok()??;
     Some(polyline(&curve))
