@@ -265,3 +265,30 @@ fn dimensions_and_leaders_are_drawn_as_in_rhino() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Curves in Rhino's linetypes (`linetypes.3dm`, from make_linetypes.py, in millimetres): a line
+/// 100 long in Dashed (5 dash, 5 gap) is half a dash, nine dashes and half a dash, 50 drawn in
+/// all, as Rhino draws it; Continuous stays whole; a circle takes the linetype of its layer.
+#[test]
+fn curves_take_their_linetype() {
+    let data = load("linetypes.3dm");
+    let file = read(&data).unwrap();
+    let lines = |name: &str| match &file.objects.iter().find(|o| o.attributes.name == name).unwrap().geometry {
+        Geometry::Lines(l, _) => l.clone(),
+        other => panic!("{name}: {:?}", std::mem::discriminant(other)),
+    };
+    let drawn = |l: &[Vec<DVec3>]| l.iter().map(|p| p.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>()).sum::<f64>();
+    assert_eq!(lines("Continuous").len(), 1);
+    let dashed = lines("Dashed");
+    assert_eq!(dashed.len(), 11, "half, nine and half a dash");
+    assert!((drawn(&dashed) - 50.0).abs() < 1e-6, "{}", drawn(&dashed));
+    assert!((dashed[0][0].x - 0.0).abs() < 1e-9 && (dashed[0][1].x - 2.5).abs() < 1e-9);
+    // Hidden: 2 dash, 2 gap; Dots: dots one apart
+    assert!((drawn(&lines("Hidden")) - 50.0).abs() < 1e-6);
+    assert!(lines("Dots").len() >= 99);
+    // by layer: the circle, 30 across, dashed along its length
+    let circle = lines("Circle by layer");
+    assert!(circle.len() > 8, "{} pieces", circle.len());
+    let around = std::f64::consts::PI * 30.0;
+    assert!((drawn(&circle) - around / 2.0).abs() < 0.05 * around, "{} of {around}", drawn(&circle));
+}

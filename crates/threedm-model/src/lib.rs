@@ -18,6 +18,8 @@ pub struct Layer {
     pub color: [u8; 4],
     pub visible: bool,
     pub material: i32,
+    /// The index of its linetype (`-1` continuous).
+    pub linetype: i32,
 }
 
 /// A material (`ON_Material`): its diffuse colour and transparency.
@@ -54,11 +56,14 @@ pub struct Attributes {
     pub mode: u8,
     /// 1 model space, 2 page (layout) space.
     pub space: u8,
+    /// The linetype by index, and where it comes from: 0 by layer, 1 by object, 3 by parent.
+    pub linetype: i32,
+    pub linetype_source: u8,
 }
 
 impl Default for Attributes {
     fn default() -> Self {
-        Attributes { id: Uuid::default(), name: String::new(), layer: 0, material: -1, color: [0, 0, 0, 0], color_source: 0, material_source: 0, visible: true, mode: 0, space: 1 }
+        Attributes { id: Uuid::default(), name: String::new(), layer: 0, material: -1, color: [0, 0, 0, 0], color_source: 0, material_source: 0, visible: true, mode: 0, space: 1, linetype: -1, linetype_source: 0 }
     }
 }
 

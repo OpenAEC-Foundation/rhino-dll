@@ -66,6 +66,8 @@ struct Reader<'a> {
 
 /// What texts and hatches are drawn with.
 struct Drafting {
+    /// Linetypes by index: their dashes (positive) and gaps (negative), in model units.
+    linetypes: Vec<(i32, Vec<f64>)>,
     patterns: Vec<drafting::HatchPattern>,
     dim_styles: Vec<drafting::DimStyle>,
     font: Option<&'static [u8]>,
@@ -85,7 +87,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     }
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
-    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001 }, vertices: 0 };
+    let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001 }, vertices: 0 };
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,
@@ -123,6 +125,13 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 }
                 Ok(())
             }),
+            TCODE_LINETYPE_TABLE => table(body, TCODE_LINETYPE_RECORD, &mut r, "linetypes", |mut c, f| {
+                let position = f.drafting.linetypes.len() as i32;
+                if let Some(object) = c.object()?.filter(|o| o.class == ON_LINETYPE) {
+                    f.drafting.linetypes.push(read_linetype(object.data, position)?);
+                }
+                Ok(())
+            }),
             TCODE_DIMSTYLE_TABLE => table(body, TCODE_DIMSTYLE_RECORD, &mut r, "dimension styles", |mut c, f| {
                 if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_DIM_STYLE) {
                     f.drafting.dim_styles.extend(drafting::read_dim_style(object.data)?);
@@ -138,7 +147,8 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
             }),
             TCODE_OBJECT_TABLE => table(body, TCODE_OBJECT_RECORD, &mut r, "objects", |c, f| {
                 f.drafting.meters = f.file.meters;
-                let object = read_object(c, &mut f.vertices, &f.drafting)?;
+                let mut object = read_object(c, &mut f.vertices, &f.drafting)?;
+                dash(&mut object, &f.file.layers, &f.drafting.linetypes);
                 f.file.objects.push(object);
                 Ok(())
             }),
@@ -254,16 +264,16 @@ fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
     let stored = c.i32()?;
     c.i32()?; // IGES level
     let material = c.i32()?;
-    c.i32()?;
+    c.i32()?; // (obsolete)
     let color = c.color()?;
     c.take(20)?; // obsolete line style
     let name = c.wstring()?;
-    let mut layer = RhinoLayer { index: if stored >= 0 { stored } else { index }, name, id: Uuid::default(), parent: Uuid::default(), color, visible: mode != 1, material, };
+    let mut layer = RhinoLayer { index: if stored >= 0 { stored } else { index }, name, id: Uuid::default(), parent: Uuid::default(), color, visible: mode != 1, material, linetype: -1 };
     if minor >= 1 {
         layer.visible = c.bool()? && mode != 1;
     }
     if minor >= 2 {
-        c.i32()?; // line pattern
+        layer.linetype = c.i32()?;
     }
     if minor >= 3 {
         c.take(12)?; // plot colour and weight
@@ -449,9 +459,7 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
                 2 => {
                     c.wstring()?; // url
                 }
-                3 => {
-                    c.i32()?; // line type
-                }
+                3 => a.linetype = c.i32()?,
                 4 => a.material = c.i32()?,
                 5 => {
                     c.chunk()?; // rendering attributes
@@ -472,9 +480,10 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
                 11 => a.visible = c.bool()?,
                 12 => a.mode = c.u8()? % 16,
                 13 => a.color_source = c.u8()?,
-                14 | 15 | 17 => {
-                    c.u8()?; // plot colour, plot weight and line type source
+                14 | 15 => {
+                    c.u8()?; // plot colour and plot weight source
                 }
+                17 => a.linetype_source = c.u8()?,
                 16 => a.material_source = c.u8()?,
                 18 => {
                     let n = c.count(4)?;
@@ -664,6 +673,117 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         0x40000 => "SubD objects (no mesh in the file)",
         _ => "other objects",
     }))
+}
+
+const TCODE_LINETYPE_TABLE: u32 = 0x1000_0023;
+const TCODE_LINETYPE_RECORD: u32 = 0x2000_8078;
+const ON_LINETYPE: Uuid = Uuid::parse("26F10A24-7D13-4f05-8FDA-8E364DAF8EA6");
+
+/// `ON_Linetype::Read`: its index and its segments, dashes as positive lengths and gaps as
+/// negative ones. `position` is its place in the table, for files that store no index.
+fn read_linetype(mut c: Cur<'_>, position: i32) -> R<(i32, Vec<f64>)> {
+    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let mut index = position;
+    match major {
+        1 => {
+            index = b.i32()?;
+            b.wstring()?; // name
+        }
+        2 => {
+            // ReadModelComponentAttributes: each attribute after a byte saying it is there
+            let (mut a, _, _) = b.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK)?;
+            if a.u8()? == 1 {
+                a.take(12)?; // serial numbers
+            }
+            if a.u8()? == 1 {
+                a.uuid()?; // id
+            }
+            if a.u8()? == 1 {
+                a.i32()?; // component type
+            }
+            if a.u8()? == 1 {
+                index = a.i32()?;
+            }
+        }
+        _ => return err("a linetype of an unknown version"),
+    }
+    let n = b.count(12)?;
+    let mut segments = Vec::with_capacity(n);
+    for _ in 0..n {
+        let length = b.f64()?;
+        let kind = b.u32()?;
+        let length = if length.is_finite() { length.abs() } else { 0.0 };
+        segments.push(if kind == 1 { -length } else { length });
+    }
+    Ok((index, segments))
+}
+
+/// At most this many dashes are made of one curve; beyond, it is drawn whole.
+const MAX_DASHES: usize = 100_000;
+
+/// Draws a curve in its linetype (by object, or by layer): its polylines cut into the
+/// linetype's dashes, half a first dash at each end as Rhino does. Dots (dashes of length 0)
+/// are a tenth of the pattern's smallest gap long.
+fn dash(object: &mut RhinoObject<'_>, layers: &[RhinoLayer], linetypes: &[(i32, Vec<f64>)]) {
+    let Geometry::Lines(polylines, "Curve") = &object.geometry else { return };
+    let a = &object.attributes;
+    let index = match a.linetype_source {
+        1 => a.linetype,
+        _ => layers.iter().find(|l| l.index == a.layer).map_or(-1, |l| l.linetype),
+    };
+    if index < 0 {
+        return;
+    }
+    let Some((_, segments)) = linetypes.iter().find(|(i, _)| *i == index) else { return };
+    let period: f64 = segments.iter().map(|s| s.abs()).sum();
+    if segments.len() < 2 || !segments.iter().any(|s| *s < 0.0) || !(period > 1e-12) {
+        return;
+    }
+    let smallest_gap = segments.iter().filter(|s| **s < 0.0).map(|s| s.abs()).fold(f64::INFINITY, f64::min);
+    let dot = (smallest_gap / 10.0).min(period / 20.0);
+    let mut out: Vec<Vec<DVec3>> = Vec::new();
+    for line in polylines {
+        let length: f64 = line.windows(2).map(|w| w[0].distance(w[1])).sum();
+        if !(length > 0.0) || length / period * segments.len() as f64 > MAX_DASHES as f64 {
+            out.push(line.clone());
+            continue;
+        }
+        // the point at a distance along the polyline
+        let mut ends = vec![0.0];
+        for w in line.windows(2) {
+            ends.push(ends.last().unwrap() + w[0].distance(w[1]));
+        }
+        let at = |t: f64| -> DVec3 {
+            let k = ends.partition_point(|&e| e < t).clamp(1, line.len() - 1);
+            let (e0, e1) = (ends[k - 1], ends[k]);
+            let f = if e1 > e0 { (t - e0) / (e1 - e0) } else { 0.0 };
+            line[k - 1].lerp(line[k], f.clamp(0.0, 1.0))
+        };
+        // the pieces from `a` to `b`, along the polyline's own points
+        let piece = |a: f64, b: f64| -> Vec<DVec3> {
+            let mut p = vec![at(a)];
+            p.extend(ends.iter().zip(line).filter(|(e, _)| **e > a && **e < b).map(|(_, q)| *q));
+            p.push(at(b));
+            p
+        };
+        let mut t = -segments[0].abs() / 2.0;
+        'pattern: loop {
+            for s in segments {
+                let len = s.abs();
+                if *s >= 0.0 {
+                    let (a, b) = (t.max(0.0), (t + if len > 0.0 { len } else { dot }).min(length));
+                    if b > a {
+                        out.push(piece(a, b));
+                    }
+                }
+                t += len;
+                if t >= length {
+                    break 'pattern;
+                }
+            }
+        }
+    }
+    object.geometry = Geometry::Lines(out, "Curve");
 }
 
 /// `ON_TextDot`: a label at a point, drawn by Rhino in screen pixels.
@@ -989,7 +1109,7 @@ mod tests {
         let mut c = Cur { data: &bytes, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
         let object = c.object().unwrap().unwrap();
         assert_eq!(text_dot_text(object.data.clone()).unwrap(), [("Text".to_string(), "A1".to_string()), ("Secondary text".to_string(), "Grid A, 1".to_string())]);
-        let drafting = Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001 };
+        let drafting = Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001 };
         let Geometry::Points { points, kind, .. } = read_geometry(object, 0x2000, &mut 0, &drafting).unwrap() else { panic!("not a point") };
         assert_eq!((points, kind), (&f64s(&[1.0, 2.0, 3.0])[..], "Text dot"));
     }
