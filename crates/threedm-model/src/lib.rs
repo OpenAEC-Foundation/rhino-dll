@@ -59,11 +59,56 @@ pub struct Attributes {
     /// The linetype by index, and where it comes from: 0 by layer, 1 by object, 3 by parent.
     pub linetype: i32,
     pub linetype_source: u8,
+    /// The object's own linetype (Rhino 8), dashes as positive lengths and gaps as negative.
+    pub custom_linetype: Option<Vec<f64>>,
+    /// The scale of its linetype's pattern.
+    pub linetype_scale: f64,
+    pub url: String,
+    /// Print colour and width (millimetres; 0 the default, negative no print) and where they
+    /// come from (0 by layer, 1 by object, 2 by display colour, 3 by parent).
+    pub plot_color: [u8; 4],
+    pub plot_weight: f64,
+    pub plot_color_source: u8,
+    pub plot_weight_source: u8,
+    /// The groups it is in, by index into [`File::groups`].
+    pub groups: Vec<i32>,
+    /// When not nil: the only viewport it shows in.
+    pub viewport: Uuid,
+    /// Its place in the draw order (higher on top) of drafting.
+    pub display_order: i32,
+    /// A hatch's background fill colour, and whether its boundary is drawn (Rhino 8).
+    pub hatch_background: Option<[u8; 4]>,
+    pub hatch_boundary: bool,
 }
 
 impl Default for Attributes {
     fn default() -> Self {
-        Attributes { id: Uuid::default(), name: String::new(), layer: 0, material: -1, color: [0, 0, 0, 0], color_source: 0, material_source: 0, visible: true, mode: 0, space: 1, linetype: -1, linetype_source: 0 }
+        Attributes {
+            id: Uuid::default(),
+            name: String::new(),
+            layer: 0,
+            material: -1,
+            color: [0, 0, 0, 0],
+            color_source: 0,
+            material_source: 0,
+            visible: true,
+            mode: 0,
+            space: 1,
+            linetype: -1,
+            linetype_source: 0,
+            custom_linetype: None,
+            linetype_scale: 1.0,
+            url: String::new(),
+            plot_color: [0, 0, 0, 0],
+            plot_weight: 0.0,
+            plot_color_source: 0,
+            plot_weight_source: 0,
+            groups: Vec::new(),
+            viewport: Uuid::default(),
+            display_order: 0,
+            hatch_background: None,
+            hatch_boundary: false,
+        }
     }
 }
 
@@ -170,6 +215,8 @@ pub struct File<'a> {
     pub views: Vec<View>,
     /// The views saved by name (`NamedView`).
     pub named_views: Vec<View>,
+    /// The group table: of each group its index and name.
+    pub groups: Vec<(i32, String)>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

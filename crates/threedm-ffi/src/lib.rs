@@ -62,6 +62,16 @@ fn object_summary(o: &RhinoObject<'_>) -> Value {
         "visible": a.visible,
         "mode": a.mode,
         "space": a.space,
+        "url": a.url,
+        "groups": a.groups,
+        "viewport": (!a.viewport.is_nil()).then(|| a.viewport.to_string()),
+        "display_order": a.display_order,
+        "plot_color": a.plot_color,
+        "plot_weight": a.plot_weight,
+        "linetype_scale": a.linetype_scale,
+        "custom_linetype": a.custom_linetype,
+        "hatch_background": a.hatch_background,
+        "hatch_boundary": a.hatch_boundary,
         "user_text": user,
     })
 }
@@ -126,6 +136,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "objects": file.objects.len(),
                 "views": file.views.iter().map(view_json).collect::<Vec<_>>(),
                 "named_views": file.named_views.iter().map(view_json).collect::<Vec<_>>(),
+                "groups": file.groups.iter().map(|(i, n)| json!({"index": i, "name": n})).collect::<Vec<_>>(),
                 "kinds": kinds,
                 "damaged": file.damaged,
             }))

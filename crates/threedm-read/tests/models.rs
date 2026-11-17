@@ -403,3 +403,37 @@ fn named_views_are_read_as_in_rhino() {
         }
     }
 }
+
+/// Object attributes (`attributes.3dm`, from make_attributes.py) as Rhino 9 reads them
+/// (`attributes.json`): groups (and the group table), url, print colour and width, linetype
+/// scale, an object's own linetype, draw order, a hatch's background fill and boundary. A line
+/// 100 long in Dashed at scale 2 draws half of it; one in its own 4-1 linetype four fifths.
+#[test]
+fn object_attributes_are_read_as_in_rhino() {
+    let data = load("attributes.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("attributes.json")).unwrap()).unwrap();
+    let groups: Vec<(i32, String)> = reference["groups"].as_array().unwrap().iter().map(|g| (g["index"].as_i64().unwrap() as i32, g["name"].as_str().unwrap().to_string())).collect();
+    assert_eq!(file.groups, groups);
+    for r in reference["objects"].as_array().unwrap() {
+        let name = r["name"].as_str().unwrap();
+        let a = &file.objects.iter().find(|o| o.attributes.name == name).unwrap_or_else(|| panic!("{name}")).attributes;
+        let ints = |v: &serde_json::Value| v.as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect::<Vec<_>>();
+        assert_eq!(a.groups.iter().map(|&g| g as i64).collect::<Vec<_>>(), ints(&r["groups"]), "{name}");
+        assert_eq!(a.url, r["url"].as_str().unwrap_or(""), "{name}");
+        assert_eq!(a.plot_color[..3].iter().map(|&c| c as i64).collect::<Vec<_>>(), ints(&r["plot_color"]), "{name}");
+        assert!((a.plot_weight - r["plot_weight"].as_f64().unwrap()).abs() < 1e-12, "{name}");
+        assert_eq!((a.plot_color_source as i64, a.plot_weight_source as i64), (r["plot_color_source"].as_i64().unwrap(), r["plot_weight_source"].as_i64().unwrap()), "{name}");
+        assert_eq!(a.linetype_scale, r["linetype_scale"].as_f64().unwrap(), "{name}");
+        assert_eq!(a.display_order as i64, r["display_order"].as_i64().unwrap(), "{name}");
+        assert_eq!(a.custom_linetype, r["custom_linetype"].as_array().map(|v| v.iter().map(|x| x.as_f64().unwrap()).collect::<Vec<_>>()), "{name}");
+        assert_eq!(a.hatch_background.map(|c| c.iter().map(|&x| x as i64).collect::<Vec<_>>()), r["hatch_background"].as_array().map(|_| ints(&r["hatch_background"])), "{name}");
+        assert_eq!(a.hatch_boundary, r["hatch_boundary"].as_bool().unwrap(), "{name}");
+    }
+    let drawn = |name: &str| match &file.objects.iter().find(|o| o.attributes.name == name).unwrap().geometry {
+        Geometry::Lines(l, _) => l.iter().map(|p| p.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>()).sum::<f64>(),
+        _ => panic!("{name}"),
+    };
+    assert!((drawn("Grouped") - 50.0).abs() < 1e-6, "{}", drawn("Grouped"));
+    assert!((drawn("Own linetype") - 80.0).abs() < 1.0, "{}", drawn("Own linetype"));
+}

@@ -131,6 +131,12 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 }
                 Ok(())
             }),
+            TCODE_GROUP_TABLE => table(body, TCODE_GROUP_RECORD, &mut r, "groups", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == ON_GROUP) {
+                    f.file.groups.push(read_group(object.data)?);
+                }
+                Ok(())
+            }),
             TCODE_LINETYPE_TABLE => table(body, TCODE_LINETYPE_RECORD, &mut r, "linetypes", |mut c, f| {
                 let position = f.drafting.linetypes.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == ON_LINETYPE) {
@@ -545,26 +551,21 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
         }
         a.id = c.uuid()?;
         a.layer = c.i32()?;
-        // items in increasing order, 0 ends the list; after the space (19) nothing is needed
+        // items in increasing order, 0 ends the list; from the custom section style (39) on
+        // nothing is read
         loop {
             let item = c.u8()?;
             match item {
                 1 => a.name = c.wstring()?,
-                2 => {
-                    c.wstring()?; // url
-                }
+                2 => a.url = c.wstring()?,
                 3 => a.linetype = c.i32()?,
                 4 => a.material = c.i32()?,
                 5 => {
                     c.chunk()?; // rendering attributes
                 }
                 6 => a.color = c.color()?,
-                7 => {
-                    c.color()?; // plot colour
-                }
-                8 => {
-                    c.f64()?; // plot weight
-                }
+                7 => a.plot_color = c.color()?,
+                8 => a.plot_weight = c.f64()?,
                 9 => {
                     c.u8()?; // decoration
                 }
@@ -574,16 +575,55 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
                 11 => a.visible = c.bool()?,
                 12 => a.mode = c.u8()? % 16,
                 13 => a.color_source = c.u8()?,
-                14 | 15 => {
-                    c.u8()?; // plot colour and plot weight source
-                }
+                14 => a.plot_color_source = c.u8()?,
+                15 => a.plot_weight_source = c.u8()?,
                 17 => a.linetype_source = c.u8()?,
                 16 => a.material_source = c.u8()?,
                 18 => {
                     let n = c.count(4)?;
-                    c.take(4 * n)?; // groups
+                    a.groups = (0..n).map(|_| c.i32()).collect::<R<_>>()?;
                 }
                 19 => a.space = c.u8()?,
+                20 => a.viewport = c.uuid()?,
+                21 => {
+                    let n = c.count(32)?;
+                    c.take(32 * n)?; // display material references (viewport, material)
+                }
+                22 => a.display_order = c.i32()?,
+                23..=27 => {
+                    c.u8()?; // obsolete line cap and join, clip participation source
+                }
+                28 => {
+                    c.bool()?; // clipping proof
+                    let (mut list, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+                    let n = list.count(16)?;
+                    list.take(16 * n)?; // the clipping planes that clip it
+                }
+                29 => {
+                    c.u8()?; // section attributes source
+                }
+                30 => {
+                    c.i32()?; // section hatch pattern
+                }
+                31 | 32 => {
+                    c.f64()?; // section hatch scale, rotation
+                }
+                33 => a.linetype_scale = c.f64()?,
+                34 => a.hatch_background = Some(c.color()?),
+                35 => a.hatch_boundary = c.bool()?,
+                36 => {
+                    c.xform()?; // object frame
+                }
+                37 => {
+                    c.u8()?; // section fill rule
+                }
+                38 => {
+                    // ON_Linetype: read from a copy, then passed by
+                    if let Ok((_, segments)) = read_linetype(c.clone(), 0) {
+                        a.custom_linetype = Some(segments);
+                    }
+                    c.chunk()?;
+                }
                 _ => break,
             }
         }
@@ -874,6 +914,19 @@ fn read_clipping_plane(c: &mut Cur<'_>) -> R<ClippingPlane> {
     Ok(ClippingPlane { corners, origin, normal, enabled, viewports, depth, selection })
 }
 
+const TCODE_GROUP_TABLE: u32 = 0x1000_0018;
+const TCODE_GROUP_RECORD: u32 = 0x2000_8073;
+const ON_GROUP: Uuid = Uuid::parse("721D9F97-3645-44c4-8BE6-B2CF697D25CE");
+
+/// `ON_Group::Read` (version 1): its index and name (and, from 1.1, its id).
+fn read_group(mut c: Cur<'_>) -> R<(i32, String)> {
+    let (major, _) = c.version()?;
+    if major != 1 {
+        return err("a group of an unknown version");
+    }
+    Ok((c.i32()?, c.wstring()?))
+}
+
 const TCODE_LINETYPE_TABLE: u32 = 0x1000_0023;
 const TCODE_LINETYPE_RECORD: u32 = 0x2000_8078;
 const ON_LINETYPE: Uuid = Uuid::parse("26F10A24-7D13-4f05-8FDA-8E364DAF8EA6");
@@ -930,10 +983,18 @@ fn dash(object: &mut RhinoObject<'_>, layers: &[RhinoLayer], linetypes: &[(i32, 
         1 => a.linetype,
         _ => layers.iter().find(|l| l.index == a.layer).map_or(-1, |l| l.linetype),
     };
-    if index < 0 {
+    if index < 0 && a.custom_linetype.is_none() {
         return;
     }
-    let Some((_, segments)) = linetypes.iter().find(|(i, _)| *i == index) else { return };
+    let scale = if a.linetype_scale.is_finite() && a.linetype_scale > 0.0 { a.linetype_scale } else { 1.0 };
+    let segments: Vec<f64> = match &a.custom_linetype {
+        Some(own) => own.iter().map(|s| s * scale).collect(),
+        None => {
+            let Some((_, segments)) = linetypes.iter().find(|(i, _)| *i == index) else { return };
+            segments.iter().map(|s| s * scale).collect()
+        }
+    };
+    let segments = &segments;
     let period: f64 = segments.iter().map(|s| s.abs()).sum();
     if segments.len() < 2 || !segments.iter().any(|s| *s < 0.0) || !(period > 1e-12) {
         return;
