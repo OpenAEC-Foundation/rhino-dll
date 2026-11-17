@@ -234,6 +234,7 @@ impl Hatch {
                 continue;
             }
             let dash_length: f64 = line.dashes.iter().map(|d| d.abs() * self.scale).sum();
+            let tiny = (hi - lo).max_element() * 1e-9;
             for k in k0 as i64..=k1 as i64 {
                 let origin = base + offset * k as f64;
                 // where the line crosses the loops, along it
@@ -260,7 +261,8 @@ impl Hatch {
                         for d in &line.dashes {
                             let len = d.abs() * self.scale;
                             let (a, b) = (t.max(t0), (t + len).min(t1));
-                            if *d >= 0.0 && b > a {
+                            // a dash the boundary cuts to nothing is left out
+                            if *d >= 0.0 && b - a > tiny {
                                 out.push(vec![self.place(origin + dir * a), self.place(origin + dir * b)]);
                             }
                             t += len;

@@ -180,6 +180,9 @@ fn texts_are_as_large_as_in_rhino() {
             if horizontal { d.y.abs() < 1e-9 && d.x.abs() > 1e-9 } else { d.x.abs() < 1e-9 && d.y.abs() > 1e-9 }
         }).count();
         assert!(along(true) > 3 && along(false) > 3, "{name}: {} across, {} up", along(true), along(false));
+        // no dash cut to nothing by the boundary
+        let shortest = lines.iter().map(|l| l[0].distance(l[l.len() - 1])).fold(f64::INFINITY, f64::min);
+        assert!(shortest > 1e-6, "{name}: a piece {shortest} long");
     }
     // Rhino's outlines of the texts: x and y from and to
     let rhino = [
