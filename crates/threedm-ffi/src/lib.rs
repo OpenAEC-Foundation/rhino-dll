@@ -13,17 +13,19 @@
 //! - `{"query": "info"}`: the Rhino version, the application that saved the file, its units,
 //!   the number of layers, materials, blocks and objects, the objects by kind, and the records
 //!   that could not be read;
-//! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "blocks"}`: the tables;
+//! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "bitmaps"}`,
+//!   `{"query": "blocks"}`: the tables (materials with their colours, textures and physically
+//!   based parameters, embedded bitmaps by name, file and byte count);
 //! - `{"query": "objects", "limit": 10, "offset": 0}`: objects with their id, name, kind, layer,
 //!   attributes and user text, `{"total", "objects"}`;
 //! - `{"query": "object", "id": "…"}`: one object by its id, with its geometry: meshes
-//!   (`positions`, triangle `indices`, optional `normals` and `colors`), `polylines`, `points`
-//!   or the block `definition` and `xform` (column-major 4×4) of an instance.
+//!   (`positions`, triangle `indices`, optional `normals`, `texture_coordinates` and `colors`),
+//!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance.
 
 use std::ffi::{c_char, CStr, CString};
 
 use serde_json::{json, Value};
-use threedm_read::{Document, File, Geometry, Mesh, RhinoObject};
+use threedm_read::{Document, File, Geometry, Material, Mesh, RhinoObject};
 
 /// An open document behind the C ABI.
 pub struct ThreedmDocument(Document);
@@ -73,8 +75,34 @@ fn mesh_json(m: &Mesh) -> Value {
         "indices": indices,
         "normals": m.normals.as_ref().map(|n| n.iter().flatten().copied().collect::<Vec<_>>()),
         "colors": m.colors.as_ref().map(|c| c.iter().flatten().copied().collect::<Vec<_>>()),
+        "texture_coordinates": m.texture_coordinates.as_ref().map(|t| t.iter().flatten().copied().collect::<Vec<_>>()),
         "color": m.color,
         "computed": m.computed,
+    })
+}
+
+fn material_json(m: &Material) -> Value {
+    let textures: Vec<Value> = m
+        .textures
+        .iter()
+        .map(|t| json!({"file": t.file, "type": t.kind, "enabled": t.enabled, "mode": t.mode, "amount": t.amount, "uvw": t.uvw.to_cols_array(), "mapping_channel": t.mapping_channel}))
+        .collect();
+    let pbr = m.pbr.as_ref().map(|p| {
+        json!({
+            "base_color": p.base_color, "brdf": p.brdf, "subsurface": p.subsurface,
+            "subsurface_scattering_color": p.subsurface_scattering_color, "subsurface_scattering_radius": p.subsurface_scattering_radius,
+            "metallic": p.metallic, "specular": p.specular, "specular_tint": p.specular_tint, "roughness": p.roughness,
+            "anisotropic": p.anisotropic, "anisotropic_rotation": p.anisotropic_rotation, "sheen": p.sheen, "sheen_tint": p.sheen_tint,
+            "clearcoat": p.clearcoat, "clearcoat_roughness": p.clearcoat_roughness, "opacity_ior": p.opacity_ior,
+            "opacity": p.opacity, "opacity_roughness": p.opacity_roughness, "emission": p.emission, "alpha": p.alpha,
+        })
+    });
+    json!({
+        "index": m.index, "name": m.name,
+        "ambient": m.ambient, "diffuse": m.diffuse, "emission": m.emission, "specular": m.specular,
+        "reflection": m.reflection, "transparent": m.transparent,
+        "shine": m.shine, "reflectivity": m.reflectivity, "index_of_refraction": m.index_of_refraction,
+        "transparency": m.transparency, "textures": textures, "pbr": pbr,
     })
 }
 
@@ -122,6 +150,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "meters_per_unit": file.meters,
                 "layers": file.layers.len(),
                 "materials": file.materials.len(),
+                "bitmaps": file.bitmaps.len(),
                 "blocks": file.blocks.len(),
                 "objects": file.objects.len(),
                 "views": file.views.iter().map(view_json).collect::<Vec<_>>(),
@@ -135,7 +164,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             .iter()
             .map(|l| json!({"index": l.index, "name": l.name, "id": l.id.to_string(), "parent": l.parent.to_string(), "color": l.color, "visible": l.visible, "material": l.material}))
             .collect()),
-        "materials" => Ok(file.materials.iter().map(|m| json!({"index": m.index, "name": m.name, "diffuse": m.diffuse, "transparency": m.transparency})).collect()),
+        "materials" => Ok(file.materials.iter().map(material_json).collect()),
+        "bitmaps" => Ok(file.bitmaps.iter().map(|b| json!({"name": b.name, "file": b.file, "bytes": b.data.as_ref().map(Vec::len)})).collect()),
         "blocks" => Ok(file
             .blocks
             .iter()
@@ -154,7 +184,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             v["geometry"] = geometry_json(&o.geometry);
             Ok(v)
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, blocks, objects, object)")),
+        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, objects, object)")),
     }
 }
 

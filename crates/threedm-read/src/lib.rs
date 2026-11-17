@@ -20,7 +20,7 @@
 
 use glam::DVec3;
 use threedm_core::*;
-pub use threedm_model::{Attributes, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject, View};
+pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject, Pbr, Texture, View};
 
 mod dimensions;
 mod document;
@@ -114,7 +114,13 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
             TCODE_MATERIAL_TABLE => table(body, TCODE_MATERIAL_RECORD, &mut r, "materials", |mut c, f| {
                 let index = f.file.materials.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == ON_MATERIAL) {
-                    f.file.materials.push(read_material(object.data, index)?);
+                    f.file.materials.push(read_material(object, index)?);
+                }
+                Ok(())
+            }),
+            TCODE_BITMAP_TABLE => table(body, TCODE_BITMAP_RECORD, &mut r, "bitmaps", |mut c, f| {
+                if let Some(object) = c.object()? {
+                    f.file.bitmaps.extend(read_bitmap(object)?);
                 }
                 Ok(())
             }),
@@ -379,9 +385,21 @@ fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
     Ok(layer)
 }
 
-/// `ON_Material`: name, diffuse colour and transparency.
-fn read_material(mut c: Cur<'_>, index: i32) -> R<Material> {
-    let mut m = Material { index, name: String::new(), diffuse: [255, 255, 255, 0], transparency: 0.0 };
+/// `ON_Material`: colours, shine, reflectivity, index of refraction and transparency, the
+/// textures (of Rhino 3 its bitmap, bump and environment files), and the physically based
+/// parameters of its user data.
+fn read_material(object: Object<'_>, index: i32) -> R<Material> {
+    let mut c = object.data;
+    let mut m = Material {
+        index,
+        diffuse: [255, 255, 255, 0],
+        specular: [255, 255, 255, 0],
+        reflection: [255, 255, 255, 0],
+        transparent: [255, 255, 255, 0],
+        index_of_refraction: 1.0,
+        ..Material::default()
+    };
+    m.pbr = object.userdata.iter().find(|(class, _)| *class == ON_PHYSICALLY_BASED_MATERIAL_USER_DATA).and_then(|(_, d)| read_pbr(d.clone()).ok());
     if c.v.archive >= 60 && c.v.opennurbs >= 2_348_833_910 {
         // Rhino 6 and later: component attributes, then the colours
         let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
@@ -403,21 +421,47 @@ fn read_material(mut c: Cur<'_>, index: i32) -> R<Material> {
             m.name = attributes.wstring()?;
         }
         b.uuid()?; // plug-in
-        b.color()?; // ambient
-        m.diffuse = b.color()?;
-        b.take(16)?; // emission, specular, reflection, transparent
-        b.take(24)?; // index of refraction, reflectivity, shine
-        m.transparency = b.f64()?;
+        read_material_colors(&mut b, &mut m)?;
+        // Rhino reads these colours without their alpha
+        for color in [&mut m.ambient, &mut m.diffuse, &mut m.emission, &mut m.specular, &mut m.reflection, &mut m.transparent] {
+            color[3] = 0;
+        }
+        m.textures = read_textures(&mut b)?;
         return Ok(m);
     }
-    let (major, _) = c.version()?;
+    let (major, minor) = c.version()?;
     match major {
         1 => {
-            // Rhino 3
-            c.color()?;
+            // Rhino 2 and 3
+            m.ambient = c.color()?;
             m.diffuse = c.color()?;
-            c.take(16)?; // emission, specular, shine
+            m.emission = c.color()?;
+            m.specular = c.color()?;
+            m.shine = c.f64()?;
             m.transparency = c.f64()?;
+            c.take(4 + 4 + 2 + 2 + 16)?; // shadows, wires, wire colour, line style
+            // the bitmap, bump and environment textures by file name
+            for kind in [1, 2, 86] {
+                let file = c.wstring()?;
+                let mode = c.i32()?;
+                c.i32()?; // bitmap index
+                if kind == 2 {
+                    c.f64()?; // bump scale
+                }
+                if !file.is_empty() {
+                    m.textures.push(Texture { file, kind, mode: if mode == 2 { 2 } else { 1 }, ..Texture::default() });
+                }
+            }
+            c.i32()?; // index
+            c.uuid()?; // plug-in
+            c.wstring()?; // Flamingo library
+            m.name = c.wstring()?;
+            if minor >= 1 {
+                c.uuid()?;
+                m.reflection = c.color()?;
+                m.transparent = c.color()?;
+                m.index_of_refraction = c.f64()?;
+            }
         }
         2 => {
             // Rhino 4 and 5
@@ -426,15 +470,161 @@ fn read_material(mut c: Cur<'_>, index: i32) -> R<Material> {
             m.index = b.i32()?;
             m.name = b.wstring()?;
             b.uuid()?;
-            b.color()?;
-            m.diffuse = b.color()?;
-            b.take(16)?;
-            b.take(24)?;
-            m.transparency = b.f64()?;
+            read_material_colors(&mut b, &mut m)?;
+            // before December 2009 the default transparent colour was grey: Rhino takes the diffuse
+            if c.v.opennurbs < 200_912_010 && m.transparent[..3] == [128, 128, 128] {
+                m.transparent = m.diffuse;
+            }
+            m.textures = read_textures(&mut b)?;
         }
         _ => return err("a material of an unknown version"),
     }
     Ok(m)
+}
+
+/// The colours (ambient, diffuse, emission, specular, reflection, transparent), index of
+/// refraction, reflectivity, shine and transparency of a Rhino 4 and later `ON_Material`.
+fn read_material_colors(c: &mut Cur<'_>, m: &mut Material) -> R<()> {
+    m.ambient = c.color()?;
+    m.diffuse = c.color()?;
+    m.emission = c.color()?;
+    m.specular = c.color()?;
+    m.reflection = c.color()?;
+    m.transparent = c.color()?;
+    m.index_of_refraction = c.f64()?;
+    m.reflectivity = c.f64()?;
+    m.shine = c.f64()?;
+    m.transparency = c.f64()?;
+    Ok(())
+}
+
+const ON_TEXTURE: Uuid = Uuid::parse("D6FF106D-329B-4f29-97E2-FD282A618020");
+const ON_PHYSICALLY_BASED_MATERIAL_USER_DATA: Uuid = Uuid::parse("5694E1AC-40E6-44F4-9CA9-3B6D0E8C4440");
+/// At most this many textures are read of a material.
+const MAX_TEXTURES: usize = 1000;
+
+/// The texture array of a Rhino 4 and later material: a count and as many `ON_Texture` objects.
+fn read_textures(c: &mut Cur<'_>) -> R<Vec<Texture>> {
+    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return Ok(Vec::new());
+    }
+    // every texture is an object chunk of at least 12 bytes
+    let count = b.count(12)?.min(MAX_TEXTURES);
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if let Some(object) = b.object()?.filter(|o| o.class == ON_TEXTURE) {
+            out.push(read_texture(object.data)?);
+        }
+    }
+    Ok(out)
+}
+
+/// `ON_Texture` (chunk version 1.x): file, type, mode, the transform of its coordinates and the
+/// blend constant.
+fn read_texture(mut c: Cur<'_>) -> R<Texture> {
+    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return err("a texture of an unknown version");
+    }
+    b.uuid()?;
+    let mapping_channel = b.i32()?;
+    let file = b.wstring()?;
+    let enabled = b.bool()?;
+    let kind = b.u32()?;
+    let mode = b.u32()?;
+    b.take(5 * 4)?; // filters and wrapping
+    let uvw = b.xform()?;
+    b.take(4 + 4 + 16 + 16)?; // border and transparent colour, transparency texture, bump scale
+    let amount = b.f64()?;
+    Ok(Texture { file, kind, enabled, mode, amount, uvw, mapping_channel })
+}
+
+/// `ON_PhysicallyBasedMaterialUserData` (chunk version 1.1 or 1.2): the parameters.
+fn read_pbr(mut c: Cur<'_>) -> R<Pbr> {
+    let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 || !(1..=2).contains(&minor) {
+        return err("physically based material data of an unknown version");
+    }
+    // `ON_4fColor`: red, green, blue and alpha floats
+    let color = |b: &mut Cur<'_>| -> R<[f32; 4]> {
+        let rgba = b.take(16)?;
+        Ok(std::array::from_fn(|k| f32::from_le_bytes(rgba[4 * k..4 * k + 4].try_into().unwrap())))
+    };
+    Ok(Pbr {
+        base_color: color(&mut b)?,
+        brdf: b.i32()?,
+        subsurface: b.f64()?,
+        subsurface_scattering_color: color(&mut b)?,
+        subsurface_scattering_radius: b.f64()?,
+        metallic: b.f64()?,
+        specular: b.f64()?,
+        specular_tint: b.f64()?,
+        roughness: b.f64()?,
+        anisotropic: b.f64()?,
+        anisotropic_rotation: b.f64()?,
+        sheen: b.f64()?,
+        sheen_tint: b.f64()?,
+        clearcoat: b.f64()?,
+        clearcoat_roughness: b.f64()?,
+        opacity_ior: b.f64()?,
+        opacity: b.f64()?,
+        opacity_roughness: b.f64()?,
+        emission: color(&mut b)?,
+        alpha: if minor >= 2 { b.f64()? } else { 1.0 },
+    })
+}
+
+/// `TCODE_BITMAP_TABLE` and its records.
+const TCODE_BITMAP_TABLE: u32 = 0x1000_0016;
+const TCODE_BITMAP_RECORD: u32 = 0x2000_8090;
+const ON_EMBEDDED_BITMAP: Uuid = Uuid::parse("772E6FC1-B17B-4fc4-8F54-5FDA511D76D2");
+const ON_WINDOWS_BITMAP_EX: Uuid = Uuid::parse("203AFC17-BCC9-44fb-A07B-7F5C31BD5ED9");
+/// At most this many bytes of an embedded image are read.
+const MAX_BITMAP: usize = 1 << 30;
+
+/// An image of the bitmap table: of an `ON_EmbeddedBitmap` its file name, bytes and (chunk
+/// version 1.1) name; of an `ON_WindowsBitmapEx` its file name. `None` for other bitmaps.
+fn read_bitmap(object: Object<'_>) -> R<Option<Bitmap>> {
+    let mut c = object.data;
+    if object.class == ON_WINDOWS_BITMAP_EX {
+        let (major, _) = c.version()?;
+        if major != 1 {
+            return Ok(None);
+        }
+        return Ok(Some(Bitmap { file: c.wstring()?, ..Bitmap::default() }));
+    }
+    if object.class != ON_EMBEDDED_BITMAP {
+        return Ok(None);
+    }
+    let (major, minor) = c.version()?;
+    if major != 1 {
+        return err("an embedded bitmap of an unknown version");
+    }
+    let file = c.wstring()?;
+    c.u32()?; // CRC
+    let data = match c.i32()? {
+        0 => {
+            let size = c.u32()? as usize;
+            c.take(size)?.to_vec()
+        }
+        1 => {
+            // the size comes first: read the bytes only when they are not too many
+            let size = c.peek_typecode().unwrap_or(0) as usize;
+            if size > MAX_BITMAP {
+                return err("an embedded bitmap larger than the reader reads");
+            }
+            c.compressed(size)?.unwrap_or_default()
+        }
+        _ => return err("an embedded bitmap of an unknown kind"),
+    };
+    let name = if minor >= 1 {
+        c.uuid()?;
+        c.wstring()?
+    } else {
+        String::new()
+    };
+    Ok(Some(Bitmap { name, file, data: Some(data) }))
 }
 
 /// `ON_InstanceDefinition`: id, name and the ids of its objects.
@@ -1011,8 +1201,8 @@ fn text_dot_text(mut c: Cur<'_>) -> R<Vec<(String, String)>> {
 pub const MAX_VERTICES: usize = 3 * if cfg!(target_arch = "wasm32") { 8_000_000 } else { 40_000_000 };
 const TOO_MANY_VERTICES: &str = "Rhino 3dm: more mesh vertices than the reader reads";
 
-/// `ON_Mesh` (chunk version 1.x uncompressed, 3.x compressed): vertices, normals, colours and
-/// faces. Texture coordinates, curvatures, n-gons and double precision vertices are not read.
+/// `ON_Mesh` (chunk version 1.x uncompressed, 3.x compressed): vertices, normals, texture
+/// coordinates, colours and faces. Curvatures, n-gons and double precision vertices are not read.
 /// `vertices` counts the vertices read from the file so far; a mesh beyond [`MAX_VERTICES`] is
 /// not read. A mesh without faces draws nothing and is not read either.
 #[doc(hidden)]
@@ -1051,6 +1241,7 @@ pub fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
         _ => bytes.chunks_exact(16).map(|f| std::array::from_fn(|k| u32::from_le_bytes(f[4 * k..4 * k + 4].try_into().unwrap()))).collect(),
     };
     let floats3 = |b: &[u8]| -> Vec<[f32; 3]> { b.chunks_exact(12).map(|p| std::array::from_fn(|k| f32::from_le_bytes(p[4 * k..4 * k + 4].try_into().unwrap()))).collect() };
+    let floats2 = |b: &[u8]| -> Vec<[f32; 2]> { b.chunks_exact(8).map(|p| std::array::from_fn(|k| f32::from_le_bytes(p[4 * k..4 * k + 4].try_into().unwrap()))).collect() };
     let colors4 = |b: &[u8]| -> Vec<[u8; 4]> { b.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect() };
     let triangles = faces.iter().map(|f| if f[2] == f[3] { 1 } else { 2 }).sum();
     let mut mesh = Mesh { faces, triangles, ..Mesh::default() };
@@ -1060,7 +1251,7 @@ pub fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
         let n = c.count(12)?;
         mesh.normals = Some(floats3(c.take(12 * n)?));
         let n = c.count(8)?;
-        c.take(8 * n)?;
+        mesh.texture_coordinates = Some(floats2(c.take(8 * n)?));
         let n = c.count(16)?;
         c.take(16 * n)?;
         let n = c.count(4)?;
@@ -1068,8 +1259,8 @@ pub fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
     } else if vcount > 0 {
         mesh.positions = floats3(&c.compressed(12 * vcount)?.unwrap_or_default());
         mesh.normals = c.compressed(12 * vcount)?.map(|b| floats3(&b));
-        // texture coordinates and curvatures, skipped without inflating them
-        c.compressed(0)?;
+        mesh.texture_coordinates = c.compressed(8 * vcount)?.map(|b| floats2(&b));
+        // curvatures, skipped without inflating them
         c.compressed(0)?;
         mesh.colors = c.compressed(4 * vcount)?.map(|b| colors4(&b));
     }
@@ -1079,6 +1270,7 @@ pub fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
     }
     mesh.normals = mesh.normals.filter(|v| v.len() == n);
     mesh.colors = mesh.colors.filter(|v| v.len() == n);
+    mesh.texture_coordinates = mesh.texture_coordinates.filter(|v| v.len() == n && n > 0);
     Ok(mesh)
 }
 

@@ -238,7 +238,7 @@ fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
         None
     };
     *vertices += points;
-    Ok(Mesh { positions, normals, colors: None, faces: list, triangles, color: None, computed: false })
+    Ok(Mesh { positions, normals, colors: None, texture_coordinates: None, faces: list, triangles, color: None, computed: false })
 }
 
 /// `Read3dmV1AttributesOrMaterial`: the chunks of an object's attributes: its layer (by
