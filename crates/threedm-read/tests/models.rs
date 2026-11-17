@@ -403,3 +403,74 @@ fn named_views_are_read_as_in_rhino() {
         }
     }
 }
+
+/// Lights (`lights.3dm`, from make_lights.py) as Rhino 9 reads them (`lights.json`): one of each
+/// kind, with every field of the light and the id, name, layer and visibility of its attributes.
+#[test]
+fn lights_are_read_as_in_rhino() {
+    let data = load("lights.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("lights.json")).unwrap()).unwrap();
+    let point = |q: &serde_json::Value| DVec3::new(q[0].as_f64().unwrap(), q[1].as_f64().unwrap(), q[2].as_f64().unwrap());
+    let color = |q: &serde_json::Value| -> [u8; 4] { std::array::from_fn(|i| q[i].as_u64().unwrap() as u8) };
+    let number = |q: &serde_json::Value| q.as_f64().unwrap();
+    let rhino = reference["lights"].as_array().unwrap();
+    assert_eq!(file.lights.len(), rhino.len());
+    // the lights are not objects: only the box is
+    assert_eq!(file.objects.len(), 1);
+    for r in rhino {
+        let name = r["name"].as_str().unwrap();
+        let l = file.lights.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(l.id.to_string(), r["id"].as_str().unwrap(), "{name}");
+        assert_eq!(l.id.to_string(), r["attributes_id"].as_str().unwrap(), "{name}");
+        assert_eq!((l.layer as i64, l.visible, l.on, l.style as i64), (r["layer"].as_i64().unwrap(), r["visible"].as_bool().unwrap(), r["enabled"].as_bool().unwrap(), r["style"].as_i64().unwrap()), "{name}");
+        for (field, ours) in [("location", l.location), ("direction", l.direction), ("length", l.length), ("width", l.width), ("attenuation", l.attenuation)] {
+            assert!(ours.distance(point(&r[field])) < 1e-12, "{name} {field}: {ours} {}", r[field]);
+        }
+        for (field, ours) in [("ambient", l.ambient), ("diffuse", l.diffuse), ("specular", l.specular)] {
+            assert_eq!(ours, color(&r[field]), "{name} {field}");
+        }
+        for (field, ours) in [("intensity", l.intensity), ("watts", l.watts), ("spot_angle", l.spot_angle.to_radians()), ("spot_exponent", l.spot_exponent), ("hotspot", l.hotspot), ("shadow_intensity", l.shadow_intensity)] {
+            assert!((ours - number(&r[field])).abs() < 1e-12, "{name} {field}: {ours} {}", r[field]);
+        }
+    }
+    use threedm_read::LightKind::*;
+    let kinds: Vec<_> = file.lights.iter().map(|l| (l.name.as_str(), l.kind, l.camera)).collect();
+    for kind in [("Point", Point, false), ("Spot", Spot, false), ("Directional", Directional, false), ("Linear", Linear, false), ("Rectangular", Rectangular, false), ("Ambient", Ambient, false), ("Headlight", Directional, true)] {
+        assert!(kinds.contains(&kind), "{kind:?}");
+    }
+}
+
+/// The lights of McNeel's openNURBS example files (not in this repository: set
+/// `OPENNURBS_EXAMPLES` to the `example_files` folder of an openNURBS checkout): all 27, in 14
+/// files, read whole.
+#[test]
+fn lights_of_the_opennurbs_examples_are_read() {
+    let Ok(folder) = std::env::var("OPENNURBS_EXAMPLES") else { return };
+    let mut files = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(folder)];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("3dm")) {
+                files.push(path);
+            }
+        }
+    }
+    let (mut lights, mut with_lights) = (0, 0);
+    for path in &files {
+        let data = std::fs::read(path).unwrap();
+        let Ok(file) = read(&data) else { continue };
+        assert!(!file.damaged.contains_key("lights"), "{}", path.display());
+        if !file.lights.is_empty() {
+            with_lights += 1;
+            lights += file.lights.len();
+        }
+        for l in &file.lights {
+            assert!(l.kind != threedm_read::LightKind::Unknown && l.location.is_finite() && l.direction.is_finite(), "{}: {l:?}", path.display());
+        }
+    }
+    assert_eq!((lights, with_lights), (27, 14));
+}

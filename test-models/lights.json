@@ -1,0 +1,436 @@
+{
+ "lights": [
+  {
+   "spot_exponent": 0.0, 
+   "spot_angle": 3.1415926535897931, 
+   "id": "fe1f649e-70cd-41d2-8198-eccd7bd38c3b", 
+   "attributes_id": "fe1f649e-70cd-41d2-8198-eccd7bd38c3b", 
+   "name": "Point", 
+   "layer": 0, 
+   "style": 8, 
+   "ambient": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "diffuse": [
+    255, 
+    200, 
+    150, 
+    0
+   ], 
+   "specular": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "watts": 60.0, 
+   "intensity": 0.80000000000000004, 
+   "location": [
+    1.0, 
+    2.0, 
+    8.0
+   ], 
+   "direction": [
+    0.0, 
+    0.0, 
+    -1.0
+   ], 
+   "length": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Point", 
+   "hotspot": 1.0, 
+   "attenuation": [
+    0.0, 
+    0.0, 
+    1.0
+   ], 
+   "enabled": true, 
+   "visible": true, 
+   "shadow_intensity": 0.40000000000000002
+  }, 
+  {
+   "spot_exponent": 22.517496833913256, 
+   "spot_angle": 0.5, 
+   "id": "d9e054bb-a414-4a21-a915-405339abd6f9", 
+   "attributes_id": "d9e054bb-a414-4a21-a915-405339abd6f9", 
+   "name": "Spot", 
+   "layer": 0, 
+   "style": 9, 
+   "ambient": [
+    10, 
+    20, 
+    30, 
+    0
+   ], 
+   "diffuse": [
+    120, 
+    220, 
+    255, 
+    0
+   ], 
+   "specular": [
+    250, 
+    240, 
+    230, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "watts": 0.0, 
+   "intensity": 0.65000000000000002, 
+   "location": [
+    12.0, 
+    -4.0, 
+    9.0
+   ], 
+   "direction": [
+    -6.0, 
+    5.0, 
+    -8.0
+   ], 
+   "length": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Spot", 
+   "hotspot": 0.34999999999999998, 
+   "attenuation": [
+    1.0, 
+    0.0, 
+    0.0
+   ], 
+   "enabled": true, 
+   "visible": true, 
+   "shadow_intensity": 1.0
+  }, 
+  {
+   "spot_exponent": 0.0, 
+   "spot_angle": 3.1415926535897931, 
+   "id": "2bac3ec2-4aec-4546-91b2-f25d2d92c179", 
+   "attributes_id": "2bac3ec2-4aec-4546-91b2-f25d2d92c179", 
+   "name": "Directional", 
+   "layer": 0, 
+   "style": 7, 
+   "ambient": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "diffuse": [
+    255, 
+    255, 
+    200, 
+    0
+   ], 
+   "specular": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "watts": 0.0, 
+   "intensity": 0.90000000000000002, 
+   "location": [
+    -5.0, 
+    -5.0, 
+    10.0
+   ], 
+   "direction": [
+    1.0, 
+    2.0, 
+    -3.0
+   ], 
+   "length": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Directional", 
+   "hotspot": 1.0, 
+   "attenuation": [
+    1.0, 
+    0.0, 
+    0.0
+   ], 
+   "enabled": true, 
+   "visible": false, 
+   "shadow_intensity": 1.0
+  }, 
+  {
+   "spot_exponent": 0.0, 
+   "spot_angle": 3.1415926535897931, 
+   "id": "229ef27d-8209-44c9-b010-d3b1e72ece79", 
+   "attributes_id": "229ef27d-8209-44c9-b010-d3b1e72ece79", 
+   "name": "Linear", 
+   "layer": 0, 
+   "style": 11, 
+   "ambient": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "diffuse": [
+    200, 
+    255, 
+    200, 
+    0
+   ], 
+   "specular": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "watts": 0.0, 
+   "intensity": 0.55000000000000004, 
+   "location": [
+    2.0, 
+    1.0, 
+    5.0
+   ], 
+   "direction": [
+    0.0, 
+    0.0, 
+    -2.0
+   ], 
+   "length": [
+    6.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Linear", 
+   "hotspot": 1.0, 
+   "attenuation": [
+    0.0, 
+    1.0, 
+    0.0
+   ], 
+   "enabled": true, 
+   "visible": true, 
+   "shadow_intensity": 1.0
+  }, 
+  {
+   "spot_exponent": 0.0, 
+   "spot_angle": 3.1415926535897931, 
+   "id": "b728c38d-aadc-4313-badc-84bd37dbf2b8", 
+   "attributes_id": "b728c38d-aadc-4313-badc-84bd37dbf2b8", 
+   "name": "Rectangular", 
+   "layer": 0, 
+   "style": 12, 
+   "ambient": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "diffuse": [
+    255, 
+    180, 
+    220, 
+    0
+   ], 
+   "specular": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    2.5, 
+    0.0
+   ], 
+   "watts": 0.0, 
+   "intensity": 0.69999999999999996, 
+   "location": [
+    3.0, 
+    2.0, 
+    6.0
+   ], 
+   "direction": [
+    0.0, 
+    0.0, 
+    -1.5
+   ], 
+   "length": [
+    4.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Rectangular", 
+   "hotspot": 1.0, 
+   "attenuation": [
+    1.0, 
+    0.0, 
+    0.0
+   ], 
+   "enabled": false, 
+   "visible": true, 
+   "shadow_intensity": 1.0
+  }, 
+  {
+   "spot_exponent": 0.0, 
+   "spot_angle": 3.1415926535897931, 
+   "id": "c68656e4-1c0b-46c6-89a8-e0e4a160511f", 
+   "attributes_id": "c68656e4-1c0b-46c6-89a8-e0e4a160511f", 
+   "name": "Ambient", 
+   "layer": 6, 
+   "style": 10, 
+   "ambient": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "diffuse": [
+    40, 
+    50, 
+    60, 
+    0
+   ], 
+   "specular": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "watts": 0.0, 
+   "intensity": 0.29999999999999999, 
+   "location": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "direction": [
+    0.0, 
+    0.0, 
+    -1.0
+   ], 
+   "length": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Ambient", 
+   "hotspot": 1.0, 
+   "attenuation": [
+    1.0, 
+    0.0, 
+    0.0
+   ], 
+   "enabled": true, 
+   "visible": true, 
+   "shadow_intensity": 1.0
+  }, 
+  {
+   "spot_exponent": 0.0, 
+   "spot_angle": 3.1415926535897931, 
+   "id": "53dc38e4-8138-4b8a-b326-b88f9e16eb02", 
+   "attributes_id": "53dc38e4-8138-4b8a-b326-b88f9e16eb02", 
+   "name": "Headlight", 
+   "layer": 0, 
+   "style": 4, 
+   "ambient": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "diffuse": [
+    230, 
+    230, 
+    255, 
+    0
+   ], 
+   "specular": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "width": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "watts": 0.0, 
+   "intensity": 0.45000000000000001, 
+   "location": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "direction": [
+    0.0, 
+    0.0, 
+    -1.0
+   ], 
+   "length": [
+    0.0, 
+    0.0, 
+    0.0
+   ], 
+   "attributes_name": "Headlight", 
+   "hotspot": 1.0, 
+   "attenuation": [
+    1.0, 
+    0.0, 
+    0.0
+   ], 
+   "enabled": true, 
+   "visible": true, 
+   "shadow_intensity": 1.0
+  }
+ ], 
+ "added": {
+  "Directional": 2, 
+  "Point": 0, 
+  "Spot": 1, 
+  "Ambient": 5, 
+  "Linear": 3, 
+  "Headlight": 6, 
+  "Rectangular": 4
+ }, 
+ "objects": [
+  "Brep", 
+  "Light", 
+  "Light", 
+  "Light", 
+  "Light", 
+  "Light", 
+  "Light", 
+  "Light"
+ ]
+}

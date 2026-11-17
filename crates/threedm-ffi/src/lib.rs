@@ -11,9 +11,10 @@
 //! `threedm_query` takes a JSON request and returns a JSON answer, `{"ok": true, "result": …}` or
 //! `{"ok": false, "error": "…"}`; the caller frees it with `threedm_free`. Requests:
 //! - `{"query": "info"}`: the Rhino version, the application that saved the file, its units,
-//!   the number of layers, materials, blocks and objects, the objects by kind, and the records
-//!   that could not be read;
-//! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "blocks"}`: the tables;
+//!   the number of layers, materials, blocks, lights and objects, the objects by kind, and the
+//!   records that could not be read;
+//! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "blocks"}`, `{"query":
+//!   "lights"}`: the tables;
 //! - `{"query": "objects", "limit": 10, "offset": 0}`: objects with their id, name, kind, layer,
 //!   attributes and user text, `{"total", "objects"}`;
 //! - `{"query": "object", "id": "…"}`: one object by its id, with its geometry: meshes
@@ -23,7 +24,7 @@
 use std::ffi::{c_char, CStr, CString};
 
 use serde_json::{json, Value};
-use threedm_read::{Document, File, Geometry, Mesh, RhinoObject};
+use threedm_read::{Document, File, Geometry, Light, LightKind, Mesh, RhinoObject};
 
 /// An open document behind the C ABI.
 pub struct ThreedmDocument(Document);
@@ -105,6 +106,41 @@ fn geometry_json(g: &Geometry<'_>) -> Value {
     }
 }
 
+fn light_json(l: &Light) -> Value {
+    let kind = match l.kind {
+        LightKind::Directional => "directional",
+        LightKind::Point => "point",
+        LightKind::Spot => "spot",
+        LightKind::Linear => "linear",
+        LightKind::Rectangular => "rectangular",
+        LightKind::Ambient => "ambient",
+        LightKind::Unknown => "unknown",
+    };
+    json!({
+        "id": l.id.to_string(),
+        "name": l.name,
+        "layer": l.layer,
+        "visible": l.visible,
+        "on": l.on,
+        "kind": kind,
+        "camera": l.camera,
+        "location": l.location.to_array(),
+        "direction": l.direction.to_array(),
+        "length": l.length.to_array(),
+        "width": l.width.to_array(),
+        "ambient": l.ambient,
+        "diffuse": l.diffuse,
+        "specular": l.specular,
+        "intensity": l.intensity,
+        "watts": l.watts,
+        "spot_angle": l.spot_angle,
+        "spot_exponent": l.spot_exponent,
+        "hotspot": l.hotspot,
+        "attenuation": l.attenuation.to_array(),
+        "shadow_intensity": l.shadow_intensity,
+    })
+}
+
 fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
     let req: Value = serde_json::from_str(request).map_err(|e| format!("request is not JSON: {e}"))?;
     let q = req.get("query").and_then(Value::as_str).ok_or("request has no \"query\"")?;
@@ -123,6 +159,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "layers": file.layers.len(),
                 "materials": file.materials.len(),
                 "blocks": file.blocks.len(),
+                "lights": file.lights.len(),
                 "objects": file.objects.len(),
                 "views": file.views.iter().map(view_json).collect::<Vec<_>>(),
                 "named_views": file.named_views.iter().map(view_json).collect::<Vec<_>>(),
@@ -141,6 +178,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             .iter()
             .map(|b| json!({"id": b.id.to_string(), "name": b.name, "objects": b.objects.iter().map(|o| o.to_string()).collect::<Vec<_>>()}))
             .collect()),
+        "lights" => Ok(file.lights.iter().map(light_json).collect()),
         "objects" => {
             let limit = req.get("limit").and_then(Value::as_u64).map_or(usize::MAX, |n| n as usize);
             let offset = req.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -154,7 +192,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             v["geometry"] = geometry_json(&o.geometry);
             Ok(v)
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, blocks, objects, object)")),
+        other => Err(format!("unknown query {other:?} (info, layers, materials, blocks, lights, objects, object)")),
     }
 }
 
