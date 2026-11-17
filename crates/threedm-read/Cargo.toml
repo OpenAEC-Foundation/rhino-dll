@@ -1,0 +1,21 @@
+[package]
+name = "threedm-read"
+description = "Semantic readers: a Rhino 3dm file to the neutral model, meshing what the file keeps no mesh of"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["font"]
+# Inter Regular built in, to set texts in; without it the caller passes a font
+font = []
+
+[dependencies]
+threedm-core.workspace = true
+threedm-model.workspace = true
+glam.workspace = true
+spade.workspace = true
+ttf-parser.workspace = true
+earcutr.workspace = true

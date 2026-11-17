@@ -1,0 +1,851 @@
+//! Semantic readers of the 3dm reader: a Rhino file (Rhino 2 to 9, archive versions 2, 3, 4, 5,
+//! 50, 60, 70, 80 and 90) to the neutral model of `threedm-model`. Written from McNeel's
+//! openNURBS source, which McNeel publishes as the reference for reading and writing 3dm files:
+//! the properties, settings, material, layer, block definition, dimension style, hatch pattern
+//! and object tables, and of each object its class data, its attributes and its user data.
+//! Nothing of openNURBS is compiled in.
+//!
+//! Objects become meshes, polylines, points or block instances: meshes as stored; the render
+//! meshes Rhino keeps with polysurfaces (Breps), surfaces and extrusions (the analysis meshes
+//! when there are none), and when a file has none (saved by a script or another program, or with
+//! "save small") a mesh made from the exact geometry as Rhino does on opening it
+//! ([`tessellate`]), Rhino 2's own polysurface layout included; SubD objects by their limit
+//! surface ([`subd`]); curves as polylines within Rhino's display tolerance; texts set in a font
+//! at their style's height and model space scale, and hatches filled or in their pattern's lines
+//! ([`drafting`]); point clouds and points; block instances with their definition and transform.
+//! Meshes are read up to [`MAX_VERTICES`] vertices, so that a damaged or hostile file cannot
+//! exhaust memory. Annotations other than texts, text dots, lights and surfaces the reader cannot
+//! evaluate (offset surfaces) are left out with the reason.
+
+use glam::DVec3;
+use threedm_core::*;
+pub use threedm_model::{Attributes, BlockDefinition, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject};
+
+mod document;
+pub mod drafting;
+pub mod subd;
+pub mod tessellate;
+
+pub use document::Document;
+pub use threedm_core::{Uuid, Versions, R};
+
+const MAGIC: &[u8] = b"3D Geometry File Format ";
+
+/// Reads a Rhino file with the built-in font (feature `font`) to set texts in.
+pub fn read(data: &[u8]) -> R<File<'_>> {
+    read_with(data, &Options::default())
+}
+
+/// How a file is read.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// The TrueType or OpenType font texts are set in (by their capital height); without one,
+    /// texts are left out.
+    pub font: Option<&'static [u8]>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options { font: if cfg!(feature = "font") { Some(FONT) } else { None } }
+    }
+}
+
+#[cfg(feature = "font")]
+const FONT: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
+#[cfg(not(feature = "font"))]
+const FONT: &[u8] = &[];
+
+/// The file being read, what its objects are drawn with, and the mesh vertices read so far.
+struct Reader<'a> {
+    file: File<'a>,
+    drafting: Drafting,
+    /// Mesh vertices read so far, at most [`MAX_VERTICES`].
+    vertices: usize,
+}
+
+/// What texts and hatches are drawn with.
+struct Drafting {
+    patterns: Vec<drafting::HatchPattern>,
+    dim_styles: Vec<drafting::DimStyle>,
+    font: Option<&'static [u8]>,
+}
+
+/// Reads a Rhino file: its tables, and its objects as meshes, polylines, points and block
+/// instances.
+pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
+    // The header may follow some bytes of other data (OLE wrappers of old files).
+    let start = data.windows(MAGIC.len()).take(1 << 20).position(|w| w == MAGIC).ok_or("Rhino 3dm: not a Rhino file (no 3dm header)")?;
+    let header = data.get(start..start + 32).ok_or("Rhino 3dm: the file is too short")?;
+    let version: u32 = std::str::from_utf8(&header[24..32]).ok().and_then(|s| s.trim().parse().ok()).ok_or("Rhino 3dm: the header has no version")?;
+    if version < 2 {
+        return err("Rhino 1 files are not supported (save them from a newer Rhino)");
+    }
+    let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
+    let mut top = Cur { data, pos: start + 32, v: file.versions };
+    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: options.font }, vertices: 0 };
+    while top.left() > 0 {
+        let chunk = match top.chunk() {
+            Ok(c) => c,
+            // a damaged tail: keep what was read
+            Err(e) if !r.file.objects.is_empty() => {
+                *r.file.damaged.entry("end of file").or_default() += 1;
+                let _ = e;
+                break;
+            }
+            Err(e) => return Err(e),
+        };
+        let mut body = chunk.body;
+        body.v = r.file.versions;
+        match chunk.typecode {
+            TCODE_ENDOFFILE => break,
+            TCODE_PROPERTIES_TABLE => read_properties(body, &mut r.file),
+            TCODE_SETTINGS_TABLE => read_settings(body, &mut r.file),
+            TCODE_MATERIAL_TABLE => table(body, TCODE_MATERIAL_RECORD, &mut r, "materials", |mut c, f| {
+                let index = f.file.materials.len() as i32;
+                if let Some(object) = c.object()?.filter(|o| o.class == ON_MATERIAL) {
+                    f.file.materials.push(read_material(object.data, index)?);
+                }
+                Ok(())
+            }),
+            TCODE_LAYER_TABLE => table(body, TCODE_LAYER_RECORD, &mut r, "layers", |mut c, f| {
+                let index = f.file.layers.len() as i32;
+                if let Some(object) = c.object()?.filter(|o| o.class == ON_LAYER) {
+                    f.file.layers.push(read_layer(object.data, index)?);
+                }
+                Ok(())
+            }),
+            TCODE_INSTANCE_DEFINITION_TABLE => table(body, TCODE_INSTANCE_DEFINITION_RECORD, &mut r, "block definitions", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == ON_INSTANCE_DEFINITION) {
+                    f.file.blocks.push(read_block_definition(object.data)?);
+                }
+                Ok(())
+            }),
+            TCODE_DIMSTYLE_TABLE => table(body, TCODE_DIMSTYLE_RECORD, &mut r, "dimension styles", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_DIM_STYLE) {
+                    f.drafting.dim_styles.extend(drafting::read_dim_style(object.data)?);
+                }
+                Ok(())
+            }),
+            TCODE_HATCHPATTERN_TABLE => table(body, TCODE_HATCHPATTERN_RECORD, &mut r, "hatch patterns", |mut c, f| {
+                let position = f.drafting.patterns.len() as i32;
+                if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_HATCH_PATTERN) {
+                    f.drafting.patterns.push(drafting::read_pattern(object.data, position)?);
+                }
+                Ok(())
+            }),
+            TCODE_OBJECT_TABLE => table(body, TCODE_OBJECT_RECORD, &mut r, "objects", |c, f| {
+                let object = read_object(c, &mut f.vertices, &f.drafting)?;
+                f.file.objects.push(object);
+                Ok(())
+            }),
+            _ => {}
+        }
+    }
+    Ok(r.file)
+}
+
+/// The records of a table, up to its end; a damaged record is counted and skipped.
+fn table<'a>(mut c: Cur<'a>, record: u32, r: &mut Reader<'a>, name: &'static str, mut each: impl FnMut(Cur<'a>, &mut Reader<'a>) -> R<()>) {
+    while c.left() > 0 {
+        let Ok(chunk) = c.chunk() else {
+            *r.file.damaged.entry(name).or_default() += 1;
+            break;
+        };
+        if chunk.typecode == TCODE_ENDOFTABLE {
+            break;
+        }
+        if chunk.typecode == record && each(chunk.body, r).is_err() {
+            *r.file.damaged.entry(name).or_default() += 1;
+        }
+    }
+}
+
+fn read_properties(mut c: Cur<'_>, file: &mut File<'_>) {
+    while let Ok(chunk) = c.chunk() {
+        match chunk.typecode {
+            TCODE_ENDOFTABLE => break,
+            TCODE_PROPERTIES_OPENNURBS_VERSION => file.versions.opennurbs = chunk.value as u32,
+            TCODE_PROPERTIES_APPLICATION => {
+                let mut b = chunk.body;
+                if b.version().is_ok() {
+                    file.application = b.wstring().unwrap_or_default();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn read_settings(mut c: Cur<'_>, file: &mut File<'_>) {
+    while let Ok(chunk) = c.chunk() {
+        match chunk.typecode {
+            TCODE_ENDOFTABLE => break,
+            TCODE_SETTINGS_UNITSANDTOLS => {
+                if let Ok(Some((meters, unit))) = read_units(chunk.body) {
+                    file.meters = meters;
+                    file.unit = unit;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `ON_3dmUnitsAndTolerances`: the length unit, as metres per unit and its name.
+fn read_units(mut c: Cur<'_>) -> R<Option<(f64, &'static str)>> {
+    let version = c.i32()?;
+    if !(100..200).contains(&version) {
+        return Ok(None);
+    }
+    let unit = c.u32()?;
+    c.take(24)?; // absolute, angle and relative tolerance
+    let mut custom = None;
+    if version >= 102 {
+        c.take(8)?; // distance display mode and precision
+        custom = Some(c.f64()?);
+    }
+    Ok(unit_scale(unit, custom))
+}
+
+/// Metres per unit of `ON::LengthUnitSystem`.
+fn unit_scale(unit: u32, custom: Option<f64>) -> Option<(f64, &'static str)> {
+    Some(match unit {
+        0 => (1.0, "none (taken as metres)"),
+        1 => (1e-6, "microns"),
+        2 => (1e-3, "millimetres"),
+        3 => (1e-2, "centimetres"),
+        4 => (1.0, "metres"),
+        5 => (1e3, "kilometres"),
+        6 => (2.54e-8, "microinches"),
+        7 => (2.54e-5, "mils"),
+        8 => (0.0254, "inches"),
+        9 => (0.3048, "feet"),
+        10 => (1609.344, "miles"),
+        12 => (1e-10, "ångströms"),
+        13 => (1e-9, "nanometres"),
+        14 => (0.1, "decimetres"),
+        15 => (10.0, "dekametres"),
+        16 => (100.0, "hectometres"),
+        17 => (1e6, "megametres"),
+        18 => (1e9, "gigametres"),
+        19 => (0.9144, "yards"),
+        20 => (0.0254 / 72.0, "printer points"),
+        21 => (0.0254 / 6.0, "printer picas"),
+        22 => (1852.0, "nautical miles"),
+        23 => (1.495_978_707e11, "astronomical units"),
+        24 => (9.460_730_472_580_8e15, "light years"),
+        25 => (3.085_677_581_49e16, "parsecs"),
+        11 => (custom.filter(|m| m.is_finite() && *m > 0.0)?, "custom units"),
+        _ => return None,
+    })
+}
+
+/// `ON_Layer` (chunk version 1.x, all Rhino versions).
+fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
+    let (major, minor) = c.version()?;
+    if major != 1 {
+        return err("a layer of an unknown version");
+    }
+    let mode = c.i32()?;
+    let stored = c.i32()?;
+    c.i32()?; // IGES level
+    let material = c.i32()?;
+    c.i32()?;
+    let color = c.color()?;
+    c.take(20)?; // obsolete line style
+    let name = c.wstring()?;
+    let mut layer = RhinoLayer { index: if stored >= 0 { stored } else { index }, name, id: Uuid::default(), parent: Uuid::default(), color, visible: mode != 1, material, };
+    if minor >= 1 {
+        layer.visible = c.bool()? && mode != 1;
+    }
+    if minor >= 2 {
+        c.i32()?; // line pattern
+    }
+    if minor >= 3 {
+        c.take(12)?; // plot colour and weight
+    }
+    if minor >= 4 {
+        c.bool()?; // locked
+    }
+    if minor >= 5 {
+        layer.id = c.uuid()?;
+        if minor >= 6 && c.v.opennurbs > 200_505_110 {
+            layer.parent = c.uuid()?;
+        }
+    }
+    Ok(layer)
+}
+
+/// `ON_Material`: name, diffuse colour and transparency.
+fn read_material(mut c: Cur<'_>, index: i32) -> R<Material> {
+    let mut m = Material { index, name: String::new(), diffuse: [255, 255, 255, 0], transparency: 0.0 };
+    if c.v.archive >= 60 && c.v.opennurbs >= 2_348_833_910 {
+        // Rhino 6 and later: component attributes, then the colours
+        let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+        if major != 1 {
+            return err("a material of an unknown version");
+        }
+        let (mut attributes, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
+        let bits = attributes.u32()?;
+        if bits & 1 != 0 {
+            attributes.uuid()?;
+        }
+        if bits & 2 != 0 {
+            attributes.uuid()?;
+        }
+        if bits & 4 != 0 {
+            m.index = attributes.i32()?;
+        }
+        if bits & 8 != 0 {
+            m.name = attributes.wstring()?;
+        }
+        b.uuid()?; // plug-in
+        b.color()?; // ambient
+        m.diffuse = b.color()?;
+        b.take(16)?; // emission, specular, reflection, transparent
+        b.take(24)?; // index of refraction, reflectivity, shine
+        m.transparency = b.f64()?;
+        return Ok(m);
+    }
+    let (major, _) = c.version()?;
+    match major {
+        1 => {
+            // Rhino 3
+            c.color()?;
+            m.diffuse = c.color()?;
+            c.take(16)?; // emission, specular, shine
+            m.transparency = c.f64()?;
+        }
+        2 => {
+            // Rhino 4 and 5
+            let (mut b, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+            b.uuid()?;
+            m.index = b.i32()?;
+            m.name = b.wstring()?;
+            b.uuid()?;
+            b.color()?;
+            m.diffuse = b.color()?;
+            b.take(16)?;
+            b.take(24)?;
+            m.transparency = b.f64()?;
+        }
+        _ => return err("a material of an unknown version"),
+    }
+    Ok(m)
+}
+
+/// `ON_InstanceDefinition`: id, name and the ids of its objects.
+fn read_block_definition(mut c: Cur<'_>) -> R<BlockDefinition> {
+    let v6 = match c.v.archive {
+        0..=50 => false,
+        60 => c.v.opennurbs > 2_348_834_153 && c.peek_typecode() == Some(TCODE_ANONYMOUS_CHUNK),
+        _ => true,
+    };
+    if !v6 {
+        let (major, _) = c.version()?;
+        if major != 1 {
+            return err("a block definition of an unknown version");
+        }
+        let id = c.uuid()?;
+        let count = c.count(16)?;
+        let objects = (0..count).map(|_| c.uuid()).collect::<R<Vec<_>>>()?;
+        let name = c.wstring()?;
+        return Ok(BlockDefinition { id, name, objects });
+    }
+    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return err("a block definition of an unknown version");
+    }
+    let (mut a, _, _) = b.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK)?;
+    let mut definition = BlockDefinition { id: Uuid::default(), name: String::new(), objects: Vec::new() };
+    if a.u8()? == 1 {
+        a.take(12)?; // serial numbers
+    }
+    if a.u8()? == 1 {
+        definition.id = a.uuid()?;
+    }
+    if a.u8()? == 1 {
+        a.i32()?; // component type
+    }
+    if a.u8()? == 1 {
+        a.i32()?; // index
+    }
+    if a.u8()? == 1 {
+        definition.name = a.wstring()?;
+    }
+    b.i32()?; // definition type (static, linked, ..)
+    b.chunk()?; // unit system
+    for _ in 0..3 {
+        b.wstring()?; // description, url, url tag
+    }
+    b.take(48)?; // bounding box
+    if b.bool()? {
+        let count = b.count(16)?;
+        definition.objects = (0..count).map(|_| b.uuid()).collect::<R<Vec<_>>>()?;
+    }
+    Ok(definition)
+}
+
+/// One record of the object table: the object type, the object, its attributes and the user
+/// data of the attributes. `vertices` counts the mesh vertices read from the file so far.
+fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) -> R<RhinoObject<'a>> {
+    let kind = c.chunk()?;
+    if kind.typecode != TCODE_OBJECT_RECORD_TYPE {
+        return err("an object record without its type");
+    }
+    let object_type = kind.value as u32;
+    let object = c.object()?;
+    let mut attributes = Attributes::default();
+    let mut user = Vec::new();
+    while c.left() > 0 {
+        let chunk = c.chunk()?;
+        match chunk.typecode {
+            TCODE_OBJECT_RECORD_ATTRIBUTES => attributes = read_attributes(chunk.body)?,
+            TCODE_OBJECT_RECORD_ATTRIBUTES_USERDATA => {
+                let mut body = chunk.body;
+                user.extend(user_strings_of(&user_data(&mut body)));
+            }
+            TCODE_OBJECT_RECORD_END => break,
+            _ => {}
+        }
+    }
+    let geometry = match object {
+        Some(object) => {
+            user.extend(user_strings_of(&object.userdata));
+            match read_geometry(object, object_type, vertices, drafting) {
+                Ok(geometry) => geometry,
+                Err(e) if e == TOO_MANY_VERTICES => Geometry::Skipped("meshes beyond the vertex limit"),
+                Err(_) => Geometry::Skipped("unreadable objects"),
+            }
+        }
+        None => Geometry::Skipped("empty objects"),
+    };
+    Ok(RhinoObject { geometry, attributes, user })
+}
+
+/// `ON_3dmObjectAttributes`: the item list of Rhino 5 and later, or the fixed layout before.
+fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
+    let mut a = Attributes::default();
+    if c.v.archive >= 5 && c.v.opennurbs >= 200_712_190 {
+        let (major, _) = c.version()?;
+        if major != 2 {
+            return err("object attributes of an unknown version");
+        }
+        a.id = c.uuid()?;
+        a.layer = c.i32()?;
+        // items in increasing order, 0 ends the list; after the space (19) nothing is needed
+        loop {
+            let item = c.u8()?;
+            match item {
+                1 => a.name = c.wstring()?,
+                2 => {
+                    c.wstring()?; // url
+                }
+                3 => {
+                    c.i32()?; // line type
+                }
+                4 => a.material = c.i32()?,
+                5 => {
+                    c.chunk()?; // rendering attributes
+                }
+                6 => a.color = c.color()?,
+                7 => {
+                    c.color()?; // plot colour
+                }
+                8 => {
+                    c.f64()?; // plot weight
+                }
+                9 => {
+                    c.u8()?; // decoration
+                }
+                10 => {
+                    c.i32()?; // wire density
+                }
+                11 => a.visible = c.bool()?,
+                12 => a.mode = c.u8()? % 16,
+                13 => a.color_source = c.u8()?,
+                14 | 15 | 17 => {
+                    c.u8()?; // plot colour, plot weight and line type source
+                }
+                16 => a.material_source = c.u8()?,
+                18 => {
+                    let n = c.count(4)?;
+                    c.take(4 * n)?; // groups
+                }
+                19 => a.space = c.u8()?,
+                _ => break,
+            }
+        }
+    } else {
+        let (major, minor) = c.version()?;
+        if major != 1 {
+            return err("object attributes of an unknown version");
+        }
+        a.id = c.uuid()?;
+        a.layer = c.i32()?;
+        a.material = c.i32()?;
+        a.color = c.color()?;
+        c.take(20)?; // obsolete line style
+        c.i32()?; // wire density
+        a.mode = c.u8()? % 16;
+        a.color_source = c.u8()?;
+        c.u8()?; // line type source
+        a.material_source = c.u8()?;
+        a.name = c.wstring()?;
+        c.wstring()?; // url
+        a.visible = a.mode != 1;
+        if minor >= 1 {
+            let n = c.count(4)?;
+            c.take(4 * n)?;
+            if minor >= 2 {
+                a.visible = c.bool()?;
+            }
+            if minor >= 6 {
+                // display material references (1.3), decoration and plot colour and weight (1.4),
+                // line type (1.5), then the space (1.6): 1 for a layout. A short record keeps
+                // model space.
+                let mut space = || -> R<u8> {
+                    let n = c.count(32)?;
+                    c.take(32 * n)?;
+                    c.take(4 + 1 + 4 + 1 + 8 + 4)?;
+                    c.u8()
+                };
+                if matches!(space(), Ok(1)) {
+                    a.space = 2;
+                }
+            }
+        }
+    }
+    Ok(a)
+}
+
+fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize, d: &Drafting) -> R<Geometry<'a>> {
+    let mut c = object.data;
+    let class = object.class;
+    if class == ON_MESH {
+        return Ok(Geometry::Meshes(vec![read_mesh(&mut c, vertices)?], "Mesh"));
+    }
+    if class == ON_BREP || BREP_ALIASES.contains(&class) {
+        let (meshes, faces) = read_brep(&mut c, vertices)?;
+        let kind = if faces == 1 { "Surface" } else { "Polysurface" };
+        return Ok(if meshes.is_empty() { Geometry::Skipped("polysurfaces without a render mesh") } else { Geometry::Meshes(meshes, kind) });
+    }
+    if class == ON_EXTRUSION {
+        let (mut meshes, shape, minor) = read_extrusion(&mut c, vertices)?;
+        if meshes.is_empty() {
+            // Rhino 5: the meshes are user data of the extrusion
+            if let Some((_, data)) = object.userdata.iter().find(|(id, _)| *id == ON_V5_EXTRUSION_MESH_CACHE) {
+                let mut data = data.clone();
+                for _ in 0..2 {
+                    match data.object() {
+                        Ok(Some(o)) if o.class == ON_MESH => {
+                            let mut d = o.data;
+                            meshes.push(read_mesh(&mut d, vertices)?);
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        if meshes.is_empty() {
+            // no mesh in the file: walls and caps from the profile and path
+            match tessellate::extrusion(&shape, minor, vertices) {
+                Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+                mesh => meshes.extend(mesh.ok().flatten()),
+            }
+        }
+        return Ok(if meshes.is_empty() { Geometry::Skipped("extrusions without a render mesh") } else { Geometry::Meshes(meshes, "Extrusion") });
+    }
+    if tessellate::is_surface(class) {
+        return Ok(match tessellate::surface_object(class, c, vertices) {
+            Ok(Some(mesh)) => Geometry::Meshes(vec![mesh], "Surface"),
+            Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+            _ => Geometry::Skipped("surfaces without a mesh"),
+        });
+    }
+    if class == ON_INSTANCE_REF {
+        let (major, _) = c.version()?;
+        if major != 1 {
+            return err("a block instance of an unknown version");
+        }
+        let definition = c.uuid()?;
+        let xform = c.xform()?;
+        return Ok(Geometry::Instance { definition, xform });
+    }
+    if class == ON_POINT_CLOUD {
+        let (major, minor) = c.version()?;
+        if major != 1 {
+            return err("a point cloud of an unknown version");
+        }
+        let count = c.count(24)?;
+        let points = c.take(24 * count)?;
+        c.take(16 * 8 + 48 + 4)?; // plane, bounding box, flags
+        let mut colors = None;
+        if minor >= 1 {
+            let normals = c.count(24)?;
+            c.take(24 * normals)?;
+            let n = c.count(4)?;
+            let list = c.take(4 * n)?;
+            colors = (n == count).then_some(list);
+        }
+        return Ok(Geometry::Points { points, colors, kind: "Point cloud" });
+    }
+    if class == ON_POINT {
+        c.version()?;
+        return Ok(Geometry::Points { points: c.take(24)?, colors: None, kind: "Point" });
+    }
+    if class == ON_SUBD {
+        // Rhino keeps no mesh of a SubD: its limit surface, from the control net
+        return Ok(match subd::subd(c, vertices) {
+            Ok(Some(mesh)) => Geometry::Meshes(vec![mesh], "SubD"),
+            Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+            _ => Geometry::Skipped("SubD objects that could not be read"),
+        });
+    }
+    if class == drafting::ON_TEXT {
+        return Ok(match drafting::read_text(&mut c) {
+            Ok(text) => {
+                // in its dimension style's text height and model space scale
+                let style = d.dim_styles.iter().find(|s| s.id == text.style()).or(d.dim_styles.first());
+                match d.font {
+                    Some(font) => Geometry::Meshes(text.mesh(style, font).into_iter().collect(), "Text"),
+                    None => Geometry::Skipped("texts (no font to set them in)"),
+                }
+            }
+            Err(_) => Geometry::Skipped("texts that could not be read"),
+        });
+    }
+    if class == drafting::ON_HATCH {
+        return Ok(match drafting::read_hatch(&mut c) {
+            Ok(h) => {
+                // in its pattern's lines, or filled (a solid or gradient pattern, or none found)
+                match d.patterns.iter().find(|p| p.index == h.pattern()).filter(|p| !p.solid) {
+                    Some(p) => Geometry::Lines(h.lines(p), "Hatch"),
+                    None => Geometry::Meshes(h.fill().into_iter().collect(), "Hatch"),
+                }
+            }
+            Err(_) => Geometry::Skipped("hatches that could not be read"),
+        });
+    }
+    if let Some(polyline) = tessellate::curve_object(class, &mut c) {
+        return Ok(Geometry::Lines(vec![polyline], "Curve"));
+    }
+    Ok(Geometry::Skipped(match object_type {
+        1 | 2 => "points",
+        4 => "curves",
+        8 => "surfaces without a mesh",
+        0x200 => "annotations",
+        0x2000 => "text dots",
+        0x8000 => "details",
+        0x10000 => "hatches",
+        0x100 => "lights",
+        0x2000_0000 => "clipping planes",
+        0x40000 => "SubD objects (no mesh in the file)",
+        _ => "other objects",
+    }))
+}
+
+/// At most this many mesh vertices are read from a file: compressed arrays could otherwise
+/// inflate far beyond the size of the file. Meshes beyond are left out and counted.
+pub const MAX_VERTICES: usize = 3 * if cfg!(target_arch = "wasm32") { 8_000_000 } else { 40_000_000 };
+const TOO_MANY_VERTICES: &str = "Rhino 3dm: more mesh vertices than the reader reads";
+
+/// `ON_Mesh` (chunk version 1.x uncompressed, 3.x compressed): vertices, normals, colours and
+/// faces. Texture coordinates, curvatures, n-gons and double precision vertices are not read.
+/// `vertices` counts the vertices read from the file so far; a mesh beyond [`MAX_VERTICES`] is
+/// not read. A mesh without faces draws nothing and is not read either.
+#[doc(hidden)]
+pub fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
+    let (major, _) = c.version()?;
+    if major != 1 && major != 3 {
+        return err("a mesh of an unknown version");
+    }
+    let vcount = c.i32()?.max(0) as usize;
+    let fcount = c.i32()?.max(0) as usize;
+    if fcount == 0 {
+        return Ok(Mesh::default());
+    }
+    if vcount > MAX_VERTICES - *vertices {
+        return Err(TOO_MANY_VERTICES.into());
+    }
+    *vertices += vcount;
+    // texture and surface domains, surface scale, vertex, normal and texture boxes, closed
+    c.take(64 + 16 + 24 + 24 + 16 + 4)?;
+    if c.bool()? {
+        c.chunk()?; // mesh parameters
+    }
+    for _ in 0..4 {
+        if c.bool()? {
+            c.chunk()?; // curvature statistics
+        }
+    }
+    let size = c.i32()?;
+    if !matches!(size, 1 | 2 | 4) {
+        return err("mesh faces of an unknown index size");
+    }
+    let bytes = c.take(fcount.checked_mul(4 * size as usize).ok_or("Rhino 3dm: too many mesh faces")?)?;
+    let faces: Vec<[u32; 4]> = match size {
+        1 => bytes.chunks_exact(4).map(|f| [f[0] as u32, f[1] as u32, f[2] as u32, f[3] as u32]).collect(),
+        2 => bytes.chunks_exact(8).map(|f| std::array::from_fn(|k| u16::from_le_bytes([f[2 * k], f[2 * k + 1]]) as u32)).collect(),
+        _ => bytes.chunks_exact(16).map(|f| std::array::from_fn(|k| u32::from_le_bytes(f[4 * k..4 * k + 4].try_into().unwrap()))).collect(),
+    };
+    let floats3 = |b: &[u8]| -> Vec<[f32; 3]> { b.chunks_exact(12).map(|p| std::array::from_fn(|k| f32::from_le_bytes(p[4 * k..4 * k + 4].try_into().unwrap()))).collect() };
+    let colors4 = |b: &[u8]| -> Vec<[u8; 4]> { b.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect() };
+    let triangles = faces.iter().map(|f| if f[2] == f[3] { 1 } else { 2 }).sum();
+    let mut mesh = Mesh { faces, triangles, ..Mesh::default() };
+    if major == 1 {
+        let n = c.count(12)?;
+        mesh.positions = floats3(c.take(12 * n)?);
+        let n = c.count(12)?;
+        mesh.normals = Some(floats3(c.take(12 * n)?));
+        let n = c.count(8)?;
+        c.take(8 * n)?;
+        let n = c.count(16)?;
+        c.take(16 * n)?;
+        let n = c.count(4)?;
+        mesh.colors = Some(colors4(c.take(4 * n)?));
+    } else if vcount > 0 {
+        mesh.positions = floats3(&c.compressed(12 * vcount)?.unwrap_or_default());
+        mesh.normals = c.compressed(12 * vcount)?.map(|b| floats3(&b));
+        // texture coordinates and curvatures, skipped without inflating them
+        c.compressed(0)?;
+        c.compressed(0)?;
+        mesh.colors = c.compressed(4 * vcount)?.map(|b| colors4(&b));
+    }
+    let n = mesh.positions.len();
+    if n != vcount {
+        return err("mesh vertices of the wrong size");
+    }
+    mesh.normals = mesh.normals.filter(|v| v.len() == n);
+    mesh.colors = mesh.colors.filter(|v| v.len() == n);
+    Ok(mesh)
+}
+
+/// `ON_Brep` (chunk version 3.x): the curves, surfaces and topology as chunks; the face count,
+/// then the render meshes (or else the analysis meshes) of the faces. A Brep saved without
+/// meshes is meshed from its surfaces and trims ([`tessellate::brep`]). Returns the meshes and
+/// the face count.
+fn read_brep(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, usize)> {
+    let (major, minor) = c.version()?;
+    if major == 2 {
+        // Rhino 2: its own layout; a polysurface that cannot be read is left out
+        let mut mesh = |c: &mut Cur<'_>, vertices: &mut usize| -> R<Option<Mesh>> {
+            Ok(match c.object()? {
+                Some(o) if o.class == ON_MESH => {
+                    let mut d = o.data;
+                    Some(read_mesh(&mut d, vertices)?)
+                }
+                _ => None,
+            })
+        };
+        let _ = minor;
+        return match tessellate::brep_v2(c, vertices, &mut mesh) {
+            Err(e) if e == TOO_MANY_VERTICES => Err(e),
+            r => Ok(r.unwrap_or_default()),
+        };
+    }
+    if major != 3 {
+        // Rhino 1 trimmed surfaces
+        return Ok((Vec::new(), 0));
+    }
+    // 2d curves, 3d curves, surfaces, vertices, edges, trims, loops, faces
+    let mut parts = Vec::with_capacity(8);
+    for _ in 0..8 {
+        parts.push(c.chunk()?.body);
+    }
+    let parts: [Cur<'_>; 8] = parts.try_into().map_err(|_| "Rhino 3dm: a damaged polysurface")?;
+    let faces = parts[7].clone();
+    let face_count = {
+        let mut f = faces.clone();
+        f.version()?;
+        f.i32()?.max(0) as usize
+    };
+    let face_colors = brep_face_colors(faces).unwrap_or_default();
+    let low = DVec3::new(c.f64()?, c.f64()?, c.f64()?);
+    let high = DVec3::new(c.f64()?, c.f64()?, c.f64()?);
+    let size = (high - low).length();
+    // a Brep that cannot be meshed is left out, as one without meshes was before
+    let computed = |vertices: &mut usize| match tessellate::brep(&parts, size, &face_colors, vertices) {
+        Err(e) if e == TOO_MANY_VERTICES => Err(e),
+        meshes => Ok((meshes.unwrap_or_default(), face_count)),
+    };
+    if minor < 1 {
+        return computed(vertices);
+    }
+    let mut out = Vec::new();
+    for _ in 0..2 {
+        let mut list = c.chunk()?.body;
+        for face in 0..face_count {
+            if list.left() == 0 {
+                break;
+            }
+            if list.bool()? {
+                if let Some(object) = list.object()?.filter(|o| o.class == ON_MESH) {
+                    let mut d = object.data;
+                    let mut mesh = read_mesh(&mut d, vertices)?;
+                    mesh.color = face_colors.get(face).copied().flatten();
+                    out.push(mesh);
+                }
+            }
+        }
+        // the analysis meshes only when there are no render meshes
+        if !out.is_empty() || c.left() == 0 {
+            break;
+        }
+    }
+    if out.is_empty() {
+        return computed(vertices);
+    }
+    Ok((out, face_count))
+}
+
+/// The per-face colours of a Brep's face array (chunk version 1.2, Rhino 7 and later); `None`
+/// for a face without one.
+fn brep_face_colors(mut c: Cur<'_>) -> R<Vec<Option<[u8; 4]>>> {
+    let (_, minor) = c.version()?;
+    let count = c.count(20)?;
+    for _ in 0..count {
+        c.i32()?; // index
+        let loops = c.count(4)?;
+        c.take(4 * loops)?;
+        c.take(12)?; // surface, reversed, material channel
+    }
+    if minor < 2 {
+        return Ok(Vec::new());
+    }
+    c.take(16 * count)?; // face ids
+    if !c.bool()? {
+        return Ok(Vec::new());
+    }
+    (0..count).map(|_| c.color().map(|color| (color != [255; 4]).then_some(color))).collect()
+}
+
+/// `ON_Extrusion`: the profile and path (the shape, meshed when the file has no mesh) and, from
+/// chunk version 1.3 (Rhino 6), the mesh cache, of which the render mesh (or else the first) is
+/// taken.
+fn read_extrusion(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, tessellate::Extrusion, i32)> {
+    let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return err("an extrusion of an unknown version");
+    }
+    let profile = tessellate::read_curve_object(&mut b, 0).unwrap_or(None);
+    let (shape, minor) = tessellate::read_extrusion_shape(&mut b, profile, minor)?;
+    if minor < 3 {
+        return Ok((Vec::new(), shape, minor));
+    }
+    let (mut cache, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let mut meshes: Vec<(Uuid, Mesh)> = Vec::new();
+    while cache.u8()? == 1 {
+        let (mut item, _, _) = cache.versioned(TCODE_ANONYMOUS_CHUNK)?;
+        let id = item.uuid()?;
+        if let Some(object) = item.object()?.filter(|o| o.class == ON_MESH) {
+            let mut d = object.data;
+            meshes.push((id, read_mesh(&mut d, vertices)?));
+        }
+    }
+    let k = meshes.iter().position(|(id, _)| *id == RENDER_MESH_ID).unwrap_or(0);
+    let meshes = if meshes.is_empty() { Vec::new() } else { vec![meshes.swap_remove(k).1] };
+    Ok((meshes, shape, minor))
+}

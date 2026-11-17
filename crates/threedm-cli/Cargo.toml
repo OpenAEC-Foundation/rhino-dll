@@ -1,0 +1,17 @@
+[package]
+name = "threedm-cli"
+description = "Command line front end of the 3dm reader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "threedm"
+path = "src/main.rs"
+
+[dependencies]
+threedm-read.workspace = true
+threedm-ffi.workspace = true
+serde_json.workspace = true

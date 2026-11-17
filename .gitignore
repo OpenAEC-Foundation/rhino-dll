@@ -1,0 +1,24 @@
+# Build output
+target/
+*.dll
+*.pdb
+*.lib
+*.exp
+*.so
+*.dylib
+
+# Rhino backups and autosaves
+*.3dmbak
+*.rhl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editors / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

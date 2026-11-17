@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/threedm-core",
+    "crates/threedm-model",
+    "crates/threedm-read",
+    "crates/threedm-ffi",
+    "crates/threedm-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "LGPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+glam = "0.30"
+spade = "2.13"
+ttf-parser = "0.25"
+earcutr = "0.5"
+serde_json = "1.0"
+threedm-core = { path = "crates/threedm-core" }
+threedm-model = { path = "crates/threedm-model" }
+threedm-read = { path = "crates/threedm-read" }
+threedm-ffi = { path = "crates/threedm-ffi" }
+
+[profile.release]
+lto = "thin"

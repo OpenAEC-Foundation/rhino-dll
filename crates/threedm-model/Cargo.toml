@@ -1,0 +1,12 @@
+[package]
+name = "threedm-model"
+description = "Neutral model produced by the 3dm reader: layers, materials, blocks and objects with their meshes, curves and points"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+threedm-core.workspace = true
+glam.workspace = true

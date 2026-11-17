@@ -1,0 +1,16 @@
+[package]
+name = "threedm-ffi"
+description = "C ABI of the 3dm reader (threedm.dll)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "threedm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+threedm-read.workspace = true
+serde_json.workspace = true
