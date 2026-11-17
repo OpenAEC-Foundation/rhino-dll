@@ -379,3 +379,27 @@ fn clipping_planes_are_read_as_in_rhino() {
         assert!(p.enabled && p.selection.is_none(), "{name}");
     }
 }
+
+/// Named views (`views.3dm`, from make_views.py) as Rhino 9 reads them (`views.json`): their
+/// names, projection, camera and field of view.
+#[test]
+fn named_views_are_read_as_in_rhino() {
+    let data = load("views.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("views.json")).unwrap()).unwrap();
+    let point = |q: &serde_json::Value| DVec3::new(q[0].as_f64().unwrap(), q[1].as_f64().unwrap(), q[2].as_f64().unwrap());
+    let rhino = reference.as_array().unwrap();
+    assert_eq!(file.named_views.len(), rhino.len());
+    for (v, r) in file.named_views.iter().zip(rhino) {
+        let name = r["name"].as_str().unwrap();
+        assert_eq!((v.name.as_str(), v.perspective), (name, r["perspective"].as_bool().unwrap()));
+        assert!(v.location.distance(point(&r["location"])) < 1e-9, "{name}");
+        assert!(v.direction.distance(point(&r["direction"]).normalize()) < 1e-9, "{name}");
+        assert!(v.up.distance(point(&r["up"]).normalize()) < 1e-9, "{name}");
+        let f: Vec<f64> = r["frustum"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        assert!((v.height - (f[3] - f[2])).abs() < 1e-9, "{name}");
+        if v.perspective {
+            assert!((v.fov_y - 2.0 * (0.5 * (f[3] - f[2]) / f[4]).atan()).abs() < 1e-12, "{name}");
+        }
+    }
+}

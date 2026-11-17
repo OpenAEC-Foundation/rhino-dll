@@ -136,6 +136,14 @@ pub struct View {
     pub id: Uuid,
     pub name: String,
     pub perspective: bool,
+    /// The camera: its location, unit direction and up (model units).
+    pub location: DVec3,
+    pub direction: DVec3,
+    pub up: DVec3,
+    /// Vertical field of view (radians) of a perspective view; the height it shows (model
+    /// units) of a parallel one.
+    pub fov_y: f64,
+    pub height: f64,
 }
 
 /// An object of the object table: its geometry, attributes and user text.
@@ -160,6 +168,8 @@ pub struct File<'a> {
     pub objects: Vec<Object<'a>>,
     /// The viewports of the file's views, the active one first.
     pub views: Vec<View>,
+    /// The views saved by name (`NamedView`).
+    pub named_views: Vec<View>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

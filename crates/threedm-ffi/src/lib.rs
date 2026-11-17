@@ -124,7 +124,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "materials": file.materials.len(),
                 "blocks": file.blocks.len(),
                 "objects": file.objects.len(),
-                "views": file.views.iter().map(|v| json!({"id": v.id.to_string(), "name": v.name, "perspective": v.perspective})).collect::<Vec<_>>(),
+                "views": file.views.iter().map(view_json).collect::<Vec<_>>(),
+                "named_views": file.named_views.iter().map(view_json).collect::<Vec<_>>(),
                 "kinds": kinds,
                 "damaged": file.damaged,
             }))
@@ -250,4 +251,8 @@ mod tests {
             threedm_close(std::ptr::null_mut());
         }
     }
+}
+
+fn view_json(v: &threedm_read::View) -> serde_json::Value {
+    json!({"id": v.id.to_string(), "name": v.name, "perspective": v.perspective, "location": v.location.to_array(), "direction": v.direction.to_array(), "up": v.up.to_array(), "fov_y": v.fov_y, "height": v.height})
 }

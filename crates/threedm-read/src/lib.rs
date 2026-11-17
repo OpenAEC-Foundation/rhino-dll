@@ -200,6 +200,8 @@ fn read_properties(mut c: Cur<'_>, file: &mut File<'_>) {
 const TCODE_SETTINGS_ANNOTATION: u32 = 0x2000_8034;
 /// `TCODE_SETTINGS_VIEW_LIST`: the views of the model's viewports, the active one first.
 const TCODE_SETTINGS_VIEW_LIST: u32 = 0x2000_8037;
+/// `TCODE_SETTINGS_NAMED_VIEW_LIST`: the views saved by name, as the view list.
+const TCODE_SETTINGS_NAMED_VIEW_LIST: u32 = 0x2000_8036;
 const TCODE_VIEW_RECORD: u32 = 0x2000_803B;
 const TCODE_VIEW_VIEWPORT: u32 = 0x2000_823B;
 const TCODE_VIEW_NAME: u32 = 0x2000_8A3B;
@@ -228,13 +230,19 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
                     file.views = views;
                 }
             }
+            TCODE_SETTINGS_NAMED_VIEW_LIST => {
+                if let Ok(views) = read_views(chunk.body) {
+                    file.named_views = views;
+                }
+            }
             _ => {}
         }
     }
 }
 
-/// `TCODE_SETTINGS_VIEW_LIST`: a count and as many `ON_3dmView` records; of each its name and,
-/// from its `ON_Viewport`, the viewport's id and projection.
+/// `TCODE_SETTINGS_VIEW_LIST` (and the named view list): a count and as many `ON_3dmView`
+/// records; of each its name and, from its `ON_Viewport`, the viewport's id, projection and
+/// camera.
 fn read_views(mut c: Cur<'_>) -> R<Vec<View>> {
     let count = c.i32()?;
     if !(0..=MAX_VIEWS as i32).contains(&count) {
@@ -256,24 +264,34 @@ fn read_views(mut c: Cur<'_>) -> R<Vec<View>> {
                 _ => {}
             }
         }
-        if let Some((id, perspective)) = viewport {
-            views.push(View { id, name, perspective });
+        if let Some(mut view) = viewport {
+            view.name = name;
+            views.push(view);
         }
     }
     Ok(views)
 }
 
-/// `ON_Viewport::Read` up to its id (version 1.1 and later): the projection (2 is
-/// perspective) and the viewport id, after the camera, frustum and port.
-fn read_viewport(mut c: Cur<'_>) -> R<(Uuid, bool)> {
+/// `ON_Viewport::Read` up to its id: the projection (2 is perspective), the camera (location,
+/// direction, up, its frame), the frustum (left, right, bottom, top, near, far), the port and,
+/// from version 1.1, the viewport id.
+fn read_viewport(mut c: Cur<'_>) -> R<View> {
     let (major, minor) = c.version()?;
-    if major != 1 || minor < 1 {
-        return err("a viewport without an id");
+    if major != 1 {
+        return err("a viewport of an unknown version");
     }
     c.take(12)?; // valid camera, frustum, port
     let projection = c.i32()?;
-    c.take(6 * 24 + 6 * 8 + 6 * 4)?; // camera location and frame, frustum, port
-    Ok((c.uuid()?, projection == 2))
+    let mut point = || -> R<DVec3> { Ok(DVec3::new(c.f64()?, c.f64()?, c.f64()?)) };
+    let (location, direction, up) = (point()?, point()?, point()?);
+    c.take(3 * 24)?; // camera frame
+    let f: Vec<f64> = (0..6).map(|_| c.f64()).collect::<R<_>>()?;
+    c.take(6 * 4)?; // port
+    let id = if minor >= 1 { c.uuid()? } else { Uuid::default() };
+    let (bottom, top, near) = (f[2], f[3], f[4]);
+    let perspective = projection == 2;
+    let fov_y = if perspective && near > 0.0 { 2.0 * (0.5 * (top - bottom) / near).atan() } else { 0.0 };
+    Ok(View { id, name: String::new(), perspective, location, direction: direction.normalize_or_zero(), up: up.normalize_or_zero(), fov_y, height: top - bottom })
 }
 
 /// `ON_3dmUnitsAndTolerances`: the length unit, as metres per unit and its name.
