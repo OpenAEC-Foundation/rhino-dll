@@ -15,7 +15,10 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   polysurfaces (Breps, Rhino 2's layout included), surfaces, extrusions (mitered ends too) and
   SubD objects (their limit surface). Curves become polylines, texts are set in a font at their
   dimension style's height and model space scale, hatches are filled or drawn in their pattern's
-  lines.
+  lines. Dimensions (linear, aligned, angular, radius, diameter, ordinate), centre marks and
+  leaders are drawn as Rhino draws them: extension lines, dimension lines and arcs, arrowheads of
+  the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
+  and text).
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
   layers) is up to the program that uses it; open-3d-viewer's Rhino loader is an example.
@@ -26,7 +29,7 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
 |---|---|
 | `threedm-core` | The openNURBS archive: chunks with 4- and 8-byte lengths, versioned and anonymous chunks, compressed buffers, `ReadObject` with user data, user strings. Also a small 3dm writer for tests. |
 | `threedm-model` | The neutral model: `File`, `Layer`, `Material`, `BlockDefinition`, `Object`, `Attributes`, `Mesh`, `Geometry`. |
-| `threedm-read` | The readers: tables and objects (`read`, `read_with`, `Document`), meshing of exact geometry (`tessellate`), SubD (`subd`), texts and hatches (`drafting`). |
+| `threedm-read` | The readers: tables and objects (`read`, `read_with`, `Document`), meshing of exact geometry (`tessellate`), SubD (`subd`), texts and hatches (`drafting`), dimensions and leaders (`dimensions`). |
 | `threedm-ffi` | The C ABI, built as `threedm.dll` / `libthreedm.so`. |
 | `threedm-cli` | The `threedm` command line tool. |
 
@@ -81,8 +84,9 @@ cargo build --release
 cargo test --release --workspace
 ```
 
-The tests read the models in `test-models` and compare the meshed areas of their objects and
-the size of their texts with what Rhino 9 measures.
+The tests read the models in `test-models` and compare the meshed areas of their objects, the
+size of their texts and the lines and texts of their dimensions and leaders with what Rhino 9
+measures and draws.
 
 ## How it was made
 

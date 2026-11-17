@@ -40,7 +40,7 @@ pub fn query(doc: &Document, request: &str) -> Value {
 /// left out.
 fn kind(o: &RhinoObject<'_>) -> String {
     match &o.geometry {
-        Geometry::Meshes(_, kind) | Geometry::Lines(_, kind) => kind.to_string(),
+        Geometry::Meshes(_, kind) | Geometry::Lines(_, kind) | Geometry::Drawing { kind, .. } => kind.to_string(),
         Geometry::Points { kind, .. } => kind.to_string(),
         Geometry::Instance { .. } => "Block instance".into(),
         Geometry::Skipped(why) => format!("left out: {why}"),
@@ -77,10 +77,15 @@ fn mesh_json(m: &Mesh) -> Value {
     })
 }
 
+fn polylines(lines: &[Vec<glam::DVec3>]) -> Vec<Vec<[f64; 3]>> {
+    lines.iter().map(|l| l.iter().map(|p| [p.x, p.y, p.z]).collect()).collect()
+}
+
 fn geometry_json(g: &Geometry<'_>) -> Value {
     match g {
         Geometry::Meshes(meshes, _) => json!({"meshes": meshes.iter().map(mesh_json).collect::<Vec<_>>()}),
-        Geometry::Lines(lines, _) => json!({"polylines": lines.iter().map(|l| l.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>()).collect::<Vec<_>>()}),
+        Geometry::Lines(lines, _) => json!({"polylines": polylines(lines)}),
+        Geometry::Drawing { lines, meshes, .. } => json!({"polylines": polylines(lines), "meshes": meshes.iter().map(mesh_json).collect::<Vec<_>>()}),
         Geometry::Points { points, colors, .. } => {
             let xyz: Vec<f64> = points.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().unwrap())).collect();
             json!({"points": xyz, "colors": colors.map(|c| c.to_vec())})

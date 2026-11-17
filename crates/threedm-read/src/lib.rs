@@ -21,6 +21,7 @@ use glam::DVec3;
 use threedm_core::*;
 pub use threedm_model::{Attributes, BlockDefinition, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject};
 
+mod dimensions;
 mod document;
 pub mod drafting;
 pub mod subd;
@@ -68,6 +69,8 @@ struct Drafting {
     patterns: Vec<drafting::HatchPattern>,
     dim_styles: Vec<drafting::DimStyle>,
     font: Option<&'static [u8]>,
+    /// Metres per model unit, for lengths shown in other units.
+    meters: f64,
 }
 
 /// Reads a Rhino file: its tables, and its objects as meshes, polylines, points and block
@@ -82,7 +85,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     }
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
-    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: options.font }, vertices: 0 };
+    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001 }, vertices: 0 };
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,
@@ -134,6 +137,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 Ok(())
             }),
             TCODE_OBJECT_TABLE => table(body, TCODE_OBJECT_RECORD, &mut r, "objects", |c, f| {
+                f.drafting.meters = f.file.meters;
                 let object = read_object(c, &mut f.vertices, &f.drafting)?;
                 f.file.objects.push(object);
                 Ok(())
@@ -627,6 +631,12 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
                 }
             }
             Err(_) => Geometry::Skipped("hatches that could not be read"),
+        });
+    }
+    if dimensions::is_annotation(class) {
+        return Ok(match dimensions::read(class, &mut c, &d.dim_styles, d.font.unwrap_or(&[]), d.meters) {
+            Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
+            Err(_) => Geometry::Skipped("dimensions and leaders that could not be read"),
         });
     }
     if let Some(polyline) = tessellate::curve_object(class, &mut c) {
