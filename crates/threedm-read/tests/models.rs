@@ -508,3 +508,62 @@ fn lights_of_the_opennurbs_examples_are_read() {
     }
     assert_eq!((lights, with_lights), (27, 14));
 }
+
+/// Materials (`materials.3dm`, from make_materials.py) as Rhino 9 reads them
+/// (`materials.json`): their colours, shine, reflectivity, index of refraction, transparency,
+/// textures and physically based parameters; and the texture coordinates of a mesh.
+#[test]
+fn materials_are_read_as_in_rhino() {
+    let data = load("materials.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("materials.json")).unwrap()).unwrap();
+    let f = |v: &serde_json::Value| v.as_f64().unwrap();
+    let floats = |v: &serde_json::Value| v.as_array().unwrap().iter().map(f).collect::<Vec<_>>();
+    // a colour as RhinoCommon gives it: alpha 255 opaque
+    let rgba = |c: [u8; 4]| vec![c[0] as f64, c[1] as f64, c[2] as f64, (255 - c[3]) as f64];
+    let rhino = reference["materials"].as_array().unwrap();
+    assert_eq!(file.materials.len(), rhino.len());
+    for (m, r) in file.materials.iter().zip(rhino) {
+        let name = r["name"].as_str().unwrap();
+        assert_eq!((m.name.as_str(), m.index as i64), (name, r["index"].as_i64().unwrap()));
+        for (color, key) in [(m.ambient, "ambient"), (m.diffuse, "diffuse"), (m.emission, "emission"), (m.specular, "specular"), (m.reflection, "reflection"), (m.transparent, "transparent")] {
+            assert_eq!(rgba(color), floats(&r[key]), "{name} {key}");
+        }
+        for (value, key) in [(m.shine, "shine"), (m.reflectivity, "reflectivity"), (m.index_of_refraction, "ior"), (m.transparency, "transparency")] {
+            assert!((value - f(&r[key])).abs() < 1e-12, "{name} {key}");
+        }
+        let textures = r["textures"].as_array().unwrap();
+        assert_eq!(m.textures.len(), textures.len(), "{name}");
+        for (t, q) in m.textures.iter().zip(textures) {
+            assert_eq!(t.file, q["file"].as_str().unwrap(), "{name}");
+            assert_eq!((t.kind as i64, t.mode as i64, t.enabled), (q["type"].as_i64().unwrap(), q["mode"].as_i64().unwrap(), q["enabled"].as_bool().unwrap()), "{name}");
+            assert_eq!(t.amount, f(&q["blend"]), "{name}");
+            // RhinoCommon's transform row by row
+            let uvw: Vec<f64> = (0..16).map(|k| t.uvw.col(k % 4)[k / 4]).collect();
+            assert_eq!(uvw, floats(&q["uvw"]), "{name}");
+        }
+        match (&m.pbr, &r["pbr"]) {
+            (None, serde_json::Value::Null) => {}
+            (Some(p), q) if q.is_object() => {
+                assert_eq!(p.base_color.map(f64::from).to_vec(), floats(&q["base_color"]), "{name}");
+                assert_eq!(p.emission.map(f64::from).to_vec(), floats(&q["emission"]), "{name}");
+                for (value, key) in [(p.metallic, "metallic"), (p.roughness, "roughness"), (p.specular, "specular"), (p.opacity, "opacity"), (p.opacity_ior, "opacity_ior"), (p.clearcoat, "clearcoat"), (p.alpha, "alpha")] {
+                    assert!((value - f(&q[key])).abs() < 1e-12, "{name} {key}");
+                }
+            }
+            (p, q) => panic!("{name}: {p:?} {q}"),
+        }
+    }
+    let meshes = reference["meshes"].as_array().unwrap();
+    assert!(!meshes.is_empty());
+    for r in meshes {
+        let name = r["name"].as_str().unwrap();
+        let o = file.objects.iter().find(|o| o.attributes.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(o.attributes.material as i64, r["material"].as_i64().unwrap(), "{name}");
+        let Geometry::Meshes(m, _) = &o.geometry else { panic!("{name}: not a mesh") };
+        let uv: Vec<Vec<f64>> = m[0].texture_coordinates.as_ref().unwrap().iter().map(|t| t.map(f64::from).to_vec()).collect();
+        let rhino: Vec<Vec<f64>> = r["texture_coordinates"].as_array().unwrap().iter().map(floats).collect();
+        assert_eq!(uv, rhino, "{name}");
+    }
+    assert_eq!(file.bitmaps.len(), reference["bitmaps"].as_array().unwrap().len());
+}

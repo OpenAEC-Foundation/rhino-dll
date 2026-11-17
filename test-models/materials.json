@@ -1,0 +1,246 @@
+{
+ "meshes": [
+  {
+   "material": 1,
+   "name": "Textured mesh",
+   "texture_coordinates": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     0.5,
+     0.0
+    ],
+    [
+     0.5,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     1.0,
+     0.0
+    ],
+    [
+     1.0,
+     1.0
+    ]
+   ]
+  }
+ ],
+ "bitmaps": [],
+ "materials": [
+  {
+   "transparent": [
+    11,
+    22,
+    33,
+    255
+   ],
+   "shine": 102.0,
+   "emission": [
+    5,
+    6,
+    7,
+    255
+   ],
+   "diffuse": [
+    200,
+    100,
+    50,
+    255
+   ],
+   "reflection": [
+    90,
+    80,
+    70,
+    255
+   ],
+   "transparency": 0.25,
+   "textures": [],
+   "index": 0,
+   "pbr": null,
+   "reflectivity": 0.29999999999999999,
+   "ior": 1.4500000000000000,
+   "specular": [
+    240,
+    230,
+    220,
+    255
+   ],
+   "name": "Plain",
+   "ambient": [
+    10,
+    20,
+    30,
+    255
+   ]
+  },
+  {
+   "transparent": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "shine": 0.0,
+   "emission": [
+    0,
+    0,
+    0,
+    255
+   ],
+   "diffuse": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "reflection": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "transparency": 0.0,
+   "textures": [
+    {
+     "uvw": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ],
+     "file": "C:\\Users\\joasg\\AppData\\Local\\Temp\\claude\\1d795b5e1dedf9ba\\d4b146b0-ee97-444d-825c-b1917862dca9\\scratchpad\\wt-materials\\test-models\\materials_bump.png",
+     "blend": 1.0,
+     "mode": 1,
+     "type": 2,
+     "enabled": true
+    },
+    {
+     "uvw": [
+      2.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ],
+     "file": "C:\\Users\\joasg\\AppData\\Local\\Temp\\claude\\1d795b5e1dedf9ba\\d4b146b0-ee97-444d-825c-b1917862dca9\\scratchpad\\wt-materials\\test-models\\materials_texture.png",
+     "blend": 1.0,
+     "mode": 1,
+     "type": 1,
+     "enabled": true
+    }
+   ],
+   "index": 1,
+   "pbr": null,
+   "reflectivity": 0.0,
+   "ior": 1.0,
+   "specular": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "name": "Textured",
+   "ambient": [
+    0,
+    0,
+    0,
+    255
+   ]
+  },
+  {
+   "transparent": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "shine": 0.0,
+   "emission": [
+    0,
+    0,
+    0,
+    255
+   ],
+   "diffuse": [
+    126,
+    126,
+    126,
+    255
+   ],
+   "reflection": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "transparency": 0.0,
+   "textures": [],
+   "index": 2,
+   "pbr": {
+    "emission": [
+     0.10000000149011612,
+     0.20000000298023224,
+     0.30000001192092896,
+     1.0
+    ],
+    "clearcoat": 0.20000000000000001,
+    "opacity": 0.75,
+    "alpha": 1.0,
+    "roughness": 0.34999999999999998,
+    "metallic": 0.90000000000000002,
+    "specular": 0.5,
+    "opacity_ior": 1.0,
+    "base_color": [
+     0.80000001192092896,
+     0.5,
+     0.25,
+     1.0
+    ]
+   },
+   "reflectivity": 0.0,
+   "ior": 1.0,
+   "specular": [
+    255,
+    255,
+    255,
+    255
+   ],
+   "name": "Metal",
+   "ambient": [
+    0,
+    0,
+    0,
+    255
+   ]
+  }
+ ]
+}

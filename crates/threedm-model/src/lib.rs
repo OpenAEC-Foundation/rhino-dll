@@ -1,7 +1,7 @@
-//! The neutral model the 3dm reader produces: the layers, materials and block definitions of a
-//! Rhino file, and its objects with their attributes, user text and geometry, as meshes,
-//! polylines, points or block instances. Exact geometry (polysurfaces, surfaces, extrusions,
-//! SubD, curves, texts and hatches) is turned into these by the reader.
+//! The neutral model the 3dm reader produces: the layers, materials, bitmaps and block
+//! definitions of a Rhino file, and its objects with their attributes, user text and geometry,
+//! as meshes, polylines, points or block instances. Exact geometry (polysurfaces, surfaces,
+//! extrusions, SubD, curves, texts and hatches) is turned into these by the reader.
 
 use glam::{DMat4, DVec3};
 use std::collections::BTreeMap;
@@ -22,13 +22,93 @@ pub struct Layer {
     pub linetype: i32,
 }
 
-/// A material (`ON_Material`): its diffuse colour and transparency.
-#[derive(Debug, Clone)]
+/// A material (`ON_Material`): its colours, shine, reflectivity, index of refraction and
+/// transparency, its textures, and its physically based parameters when it has them.
+#[derive(Debug, Clone, Default)]
 pub struct Material {
     pub index: i32,
     pub name: String,
+    pub ambient: [u8; 4],
     pub diffuse: [u8; 4],
+    pub emission: [u8; 4],
+    pub specular: [u8; 4],
+    pub reflection: [u8; 4],
+    /// The colour of transparent parts.
+    pub transparent: [u8; 4],
+    /// 0 to 255 (`ON_Material::MaxShine`).
+    pub shine: f64,
+    /// 0 to 1.
+    pub reflectivity: f64,
+    pub index_of_refraction: f64,
+    /// 0 opaque to 1 fully transparent.
     pub transparency: f64,
+    pub textures: Vec<Texture>,
+    /// `ON_PhysicallyBasedMaterial`, when the material is physically based.
+    pub pbr: Option<Pbr>,
+}
+
+/// A texture of a material (`ON_Texture`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Texture {
+    /// The image file as stored (a full or a relative path).
+    pub file: String,
+    /// `ON_Texture::TYPE`: 1 bitmap (diffuse, PBR base colour), 2 bump, 3 transparency
+    /// (opacity), 10 to 30 the other PBR slots, 86 environment.
+    pub kind: u32,
+    pub enabled: bool,
+    /// `ON_Texture::MODE`: 0 none, 1 modulate, 2 decal, 3 blend.
+    pub mode: u32,
+    /// The blend constant (`m_blend_constant_A`), 1 the texture alone.
+    pub amount: f64,
+    /// The transform of the texture coordinates (`m_uvw`), for column vectors.
+    pub uvw: DMat4,
+    /// The mapping channel the coordinates come from.
+    pub mapping_channel: i32,
+}
+
+impl Default for Texture {
+    fn default() -> Self {
+        Texture { file: String::new(), kind: 1, enabled: true, mode: 1, amount: 1.0, uvw: DMat4::IDENTITY, mapping_channel: 1 }
+    }
+}
+
+/// The physically based parameters of a material (`ON_PhysicallyBasedMaterial`), colours as
+/// linear red, green, blue and alpha floats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pbr {
+    pub base_color: [f32; 4],
+    /// `ON_PhysicallyBasedMaterial::BRDFs`: 0 GGX, 1 Lambertian.
+    pub brdf: i32,
+    pub subsurface: f64,
+    pub subsurface_scattering_color: [f32; 4],
+    pub subsurface_scattering_radius: f64,
+    pub metallic: f64,
+    pub specular: f64,
+    pub specular_tint: f64,
+    pub roughness: f64,
+    pub anisotropic: f64,
+    pub anisotropic_rotation: f64,
+    pub sheen: f64,
+    pub sheen_tint: f64,
+    pub clearcoat: f64,
+    pub clearcoat_roughness: f64,
+    pub opacity_ior: f64,
+    pub opacity: f64,
+    pub opacity_roughness: f64,
+    pub emission: [f32; 4],
+    /// 1 unless set (chunk version 2).
+    pub alpha: f64,
+}
+
+/// An image of the bitmap table (`ON_EmbeddedBitmap`, or the file name only of an
+/// `ON_WindowsBitmapEx`).
+#[derive(Debug, Clone, Default)]
+pub struct Bitmap {
+    pub name: String,
+    /// The image file as it was named when it was embedded.
+    pub file: String,
+    /// The file's bytes, when embedded.
+    pub data: Option<Vec<u8>>,
 }
 
 /// A block definition (`ON_InstanceDefinition`): the ids of its member objects.
@@ -122,6 +202,8 @@ pub struct Mesh {
     pub faces: Vec<[u32; 4]>,
     /// The triangles of the faces (a quad is two).
     pub triangles: usize,
+    /// Texture coordinates (`m_T`), one per vertex.
+    pub texture_coordinates: Option<Vec<[f32; 2]>>,
     /// The colour of the Brep face this mesh belongs to (Rhino 7 and later), over the object's.
     pub color: Option<[u8; 4]>,
     /// Made by the reader from the exact geometry: the file has no mesh for it.
@@ -265,6 +347,8 @@ pub struct File<'a> {
     pub unit: &'static str,
     pub layers: Vec<Layer>,
     pub materials: Vec<Material>,
+    /// The bitmap table: images embedded in the file.
+    pub bitmaps: Vec<Bitmap>,
     pub blocks: Vec<BlockDefinition>,
     pub objects: Vec<Object<'a>>,
     /// The viewports of the file's views, the active one first.

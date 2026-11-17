@@ -1949,6 +1949,7 @@ pub(super) fn extrusion(e: &Extrusion, minor: i32, vertices: &mut usize) -> R<Op
         positions: positions.iter().map(|p| p.to_array().map(|v| v as f32)).collect(),
         normals: Some(normals.iter().map(|n| n.to_array().map(|v| v as f32)).collect()),
         colors: None,
+        texture_coordinates: None,
         faces,
         triangles,
         color: None,
