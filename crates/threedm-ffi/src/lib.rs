@@ -43,6 +43,7 @@ fn kind(o: &RhinoObject<'_>) -> String {
         Geometry::Meshes(_, kind) | Geometry::Lines(_, kind) | Geometry::Drawing { kind, .. } => kind.to_string(),
         Geometry::Points { kind, .. } => kind.to_string(),
         Geometry::Instance { .. } => "Block instance".into(),
+        Geometry::ClippingPlane(_) => "Clipping plane".into(),
         Geometry::Skipped(why) => format!("left out: {why}"),
     }
 }
@@ -91,6 +92,15 @@ fn geometry_json(g: &Geometry<'_>) -> Value {
             json!({"points": xyz, "colors": colors.map(|c| c.to_vec())})
         }
         Geometry::Instance { definition, xform } => json!({"definition": definition.to_string(), "xform": xform.to_cols_array()}),
+        Geometry::ClippingPlane(p) => json!({
+            "corners": p.corners.iter().map(|c| c.to_array()).collect::<Vec<_>>(),
+            "origin": p.origin.to_array(),
+            "normal": p.normal.to_array(),
+            "enabled": p.enabled,
+            "viewports": p.viewports.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+            "depth": p.depth,
+            "selection": p.selection.as_ref().map(|s| json!({"objects": s.objects.iter().map(|o| o.to_string()).collect::<Vec<_>>(), "layers": s.layers, "except": s.except})),
+        }),
         Geometry::Skipped(why) => json!({"left_out": why}),
     }
 }
@@ -114,6 +124,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "materials": file.materials.len(),
                 "blocks": file.blocks.len(),
                 "objects": file.objects.len(),
+                "views": file.views.iter().map(|v| json!({"id": v.id.to_string(), "name": v.name, "perspective": v.perspective})).collect::<Vec<_>>(),
                 "kinds": kinds,
                 "damaged": file.damaged,
             }))

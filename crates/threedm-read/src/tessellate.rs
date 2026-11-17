@@ -15,7 +15,7 @@
 //! NURBS surfaces (rational too), surfaces of revolution and sum surfaces are read, also as
 //! objects of their own; curves are lines, arcs, polylines, NURBS curves and polycurves.
 //! Extrusions are walls along their profiles and, when capped, flat caps, mitered ends
-//! included. Other surfaces (offset surfaces, proxies) are left out.
+//! included. (openNURBS writes no other surfaces: offset surfaces and proxies cannot be saved.)
 
 use super::{err, Cur, Mesh, Uuid, R};
 use glam::{DVec2, DVec3};
@@ -711,6 +711,17 @@ fn read_surface_object(c: &mut Cur<'_>) -> R<Option<Surface>> {
     let Some(o) = c.object()? else { return Ok(None) };
     let mut data = o.data;
     read_surface(o.class, &mut data)
+}
+
+/// The corners of a plane surface's rectangle (`ON_PlaneSurface`, its extents), as Rhino draws
+/// a clipping plane.
+pub(super) fn plane_rectangle(c: &mut Cur<'_>) -> R<[DVec3; 4]> {
+    let Some(Surface::Plane { origin, x, y, extents, .. }) = read_surface(ON_PLANE_SURFACE, c)? else {
+        return err("a plane surface of an unknown version");
+    };
+    let at = |s: f64, t: f64| origin + s * x + t * y;
+    let [u, v] = extents;
+    Ok([at(u[0], v[0]), at(u[1], v[0]), at(u[1], v[1]), at(u[0], v[1])])
 }
 
 /// Whether objects of this class are surfaces the viewer can evaluate.

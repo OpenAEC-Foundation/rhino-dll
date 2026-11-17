@@ -14,12 +14,13 @@
 //! at their style's height and model space scale, and hatches filled or in their pattern's lines
 //! ([`drafting`]); point clouds and points; block instances with their definition and transform.
 //! Meshes are read up to [`MAX_VERTICES`] vertices, so that a damaged or hostile file cannot
-//! exhaust memory. Annotations other than texts, text dots, lights and surfaces the reader cannot
-//! evaluate (offset surfaces) are left out with the reason.
+//! exhaust memory. Clipping planes are read with their rectangle, plane and the viewports they
+//! clip, and the viewports of the file's views with them. Lights, layout details and objects the
+//! reader does not know are left out with the reason.
 
 use glam::DVec3;
 use threedm_core::*;
-pub use threedm_model::{Attributes, BlockDefinition, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject};
+pub use threedm_model::{Attributes, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Material, Mesh, Object as RhinoObject, View};
 
 mod dimensions;
 mod document;
@@ -197,6 +198,13 @@ fn read_properties(mut c: Cur<'_>, file: &mut File<'_>) {
 
 /// `TCODE_SETTINGS_ANNOTATION`: the annotation settings of the document (Rhino 2 and 3).
 const TCODE_SETTINGS_ANNOTATION: u32 = 0x2000_8034;
+/// `TCODE_SETTINGS_VIEW_LIST`: the views of the model's viewports, the active one first.
+const TCODE_SETTINGS_VIEW_LIST: u32 = 0x2000_8037;
+const TCODE_VIEW_RECORD: u32 = 0x2000_803B;
+const TCODE_VIEW_VIEWPORT: u32 = 0x2000_823B;
+const TCODE_VIEW_NAME: u32 = 0x2000_8A3B;
+/// At most this many views are read.
+const MAX_VIEWS: usize = 1000;
 
 /// The settings table: the units, and the document's annotation settings as a dimension style
 /// for annotations that name none (Rhino 2).
@@ -215,9 +223,57 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
                     file.unit = unit;
                 }
             }
+            TCODE_SETTINGS_VIEW_LIST => {
+                if let Ok(views) = read_views(chunk.body) {
+                    file.views = views;
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// `TCODE_SETTINGS_VIEW_LIST`: a count and as many `ON_3dmView` records; of each its name and,
+/// from its `ON_Viewport`, the viewport's id and projection.
+fn read_views(mut c: Cur<'_>) -> R<Vec<View>> {
+    let count = c.i32()?;
+    if !(0..=MAX_VIEWS as i32).contains(&count) {
+        return err("a view list of an unknown length");
+    }
+    let mut views = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let record = c.chunk()?;
+        if record.typecode != TCODE_VIEW_RECORD {
+            return err("a view record of an unknown kind");
+        }
+        let mut body = record.body;
+        let (mut name, mut viewport) = (String::new(), None);
+        while let Ok(chunk) = body.chunk() {
+            match chunk.typecode {
+                TCODE_ENDOFTABLE => break,
+                TCODE_VIEW_NAME => name = chunk.body.clone().wstring().unwrap_or_default(),
+                TCODE_VIEW_VIEWPORT => viewport = read_viewport(chunk.body).ok(),
+                _ => {}
+            }
+        }
+        if let Some((id, perspective)) = viewport {
+            views.push(View { id, name, perspective });
+        }
+    }
+    Ok(views)
+}
+
+/// `ON_Viewport::Read` up to its id (version 1.1 and later): the projection (2 is
+/// perspective) and the viewport id, after the camera, frustum and port.
+fn read_viewport(mut c: Cur<'_>) -> R<(Uuid, bool)> {
+    let (major, minor) = c.version()?;
+    if major != 1 || minor < 1 {
+        return err("a viewport without an id");
+    }
+    c.take(12)?; // valid camera, frustum, port
+    let projection = c.i32()?;
+    c.take(6 * 24 + 6 * 8 + 6 * 4)?; // camera location and frame, frustum, port
+    Ok((c.uuid()?, projection == 2))
 }
 
 /// `ON_3dmUnitsAndTolerances`: the length unit, as metres per unit and its name.
@@ -713,6 +769,12 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
     if let Some(polyline) = tessellate::curve_object(class, &mut c) {
         return Ok(Geometry::Lines(vec![polyline], "Curve"));
     }
+    if class == ON_CLIPPING_PLANE_SURFACE {
+        return Ok(match read_clipping_plane(&mut c) {
+            Ok(plane) => Geometry::ClippingPlane(plane),
+            Err(_) => Geometry::Skipped("clipping planes that could not be read"),
+        });
+    }
     Ok(Geometry::Skipped(match object_type {
         1 | 2 => "points",
         4 => "curves",
@@ -726,6 +788,72 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         0x40000 => "SubD objects (no mesh in the file)",
         _ => "other objects",
     }))
+}
+
+const ON_CLIPPING_PLANE_SURFACE: Uuid = Uuid::parse("DBC5A584-CE3F-4170-98A8-497069CA5C36");
+
+/// `ON_ClippingPlaneSurface::Read`: its plane surface (the rectangle Rhino draws), then
+/// `ON_ClippingPlane`: a viewport id, the plane's id, the plane, enabled, the viewports it clips
+/// (1.1 and later), its depth (1.2; whether the depth is used from 1.4) and the objects and
+/// layers it clips (1.5: items after a type byte, 0 ends them).
+fn read_clipping_plane(c: &mut Cur<'_>) -> R<ClippingPlane> {
+    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return err("a clipping plane of an unknown version");
+    }
+    let mut surface = b.chunk()?.body;
+    let corners = tessellate::plane_rectangle(&mut surface)?;
+    let (mut p, major, minor) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return err("a clipping plane of an unknown version");
+    }
+    let mut viewports = vec![p.uuid()?];
+    p.uuid()?; // the plane's id
+    let point = |p: &mut Cur<'_>| -> R<DVec3> { Ok(DVec3::new(p.f64()?, p.f64()?, p.f64()?)) };
+    let origin = point(&mut p)?;
+    p.take(48)?; // x and y axes
+    let normal = point(&mut p)?.normalize_or_zero();
+    p.take(32)?; // plane equation
+    let enabled = p.bool()?;
+    if minor >= 1 {
+        let (mut list, _, _) = p.versioned(TCODE_ANONYMOUS_CHUNK)?;
+        let n = list.count(16)?;
+        viewports = (0..n).map(|_| list.uuid()).collect::<R<_>>()?;
+    }
+    let mut depth = None;
+    if minor >= 2 {
+        let d = p.f64()?;
+        let used = if minor >= 4 { p.bool()? } else { d >= 0.0 && d < 1e38 };
+        if used && d.is_finite() && d >= 0.0 {
+            depth = Some(d);
+        }
+    }
+    let mut selection = None;
+    if minor >= 5 {
+        let (mut chosen, mut lists_enabled) = (ClipSelection::default(), true);
+        loop {
+            match p.u8()? {
+                10 => {
+                    let n = p.count(16)?;
+                    chosen.objects = (0..n).map(|_| p.uuid()).collect::<R<_>>()?;
+                }
+                11 => {
+                    let n = p.count(4)?;
+                    chosen.layers = (0..n).map(|_| p.i32()).collect::<R<_>>()?;
+                }
+                12 => chosen.except = p.bool()?,
+                13 => lists_enabled = p.bool()?,
+                _ => break,
+            }
+        }
+        if lists_enabled && (!chosen.objects.is_empty() || !chosen.layers.is_empty()) {
+            selection = Some(chosen);
+        }
+    }
+    if normal == DVec3::ZERO || !origin.is_finite() {
+        return err("a clipping plane without a plane");
+    }
+    Ok(ClippingPlane { corners, origin, normal, enabled, viewports, depth, selection })
 }
 
 const TCODE_LINETYPE_TABLE: u32 = 0x1000_0023;

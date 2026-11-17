@@ -96,8 +96,46 @@ pub enum Geometry<'a> {
     /// Lines and filled shapes together, and the object type to show: dimensions and leaders
     /// (their lines; their arrowheads and text as meshes).
     Drawing { lines: Vec<Vec<DVec3>>, meshes: Vec<Mesh>, kind: &'static str },
+    /// A clipping plane: the rectangle Rhino draws for it and the plane it cuts with.
+    ClippingPlane(ClippingPlane),
     /// Not drawn: why, for the count in the project information.
     Skipped(&'static str),
+}
+
+/// A clipping plane (`ON_ClippingPlaneSurface`). It cuts away what lies on the side its
+/// `normal` points to, in the viewports it names, when it is enabled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClippingPlane {
+    /// The rectangle Rhino draws for it, corner after corner.
+    pub corners: [DVec3; 4],
+    pub origin: DVec3,
+    /// Unit normal, to the side that is cut away.
+    pub normal: DVec3,
+    pub enabled: bool,
+    /// The viewports it clips (their ids, as in [`View::id`]).
+    pub viewports: Vec<Uuid>,
+    /// When it clips only a slab: how deep behind the plane (along −`normal`) it clips.
+    pub depth: Option<f64>,
+    /// When it clips only some objects (Rhino 8's selective clipping): which.
+    pub selection: Option<ClipSelection>,
+}
+
+/// The objects a clipping plane clips: these objects and the objects on these layers, or, when
+/// `except`, all others.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ClipSelection {
+    pub objects: Vec<Uuid>,
+    /// Layer indices.
+    pub layers: Vec<i32>,
+    pub except: bool,
+}
+
+/// A viewport of the file's views (`ON_3dmView`); the first is the view that was active.
+#[derive(Debug, Clone, PartialEq)]
+pub struct View {
+    pub id: Uuid,
+    pub name: String,
+    pub perspective: bool,
 }
 
 /// An object of the object table: its geometry, attributes and user text.
@@ -120,6 +158,8 @@ pub struct File<'a> {
     pub materials: Vec<Material>,
     pub blocks: Vec<BlockDefinition>,
     pub objects: Vec<Object<'a>>,
+    /// The viewports of the file's views, the active one first.
+    pub views: Vec<View>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

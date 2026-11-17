@@ -348,3 +348,34 @@ fn rhino5_dimensions_are_drawn_as_in_rhino() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Clipping planes (`clipping.3dm`, from make_clipping.py) as Rhino 9 reads them
+/// (`clipping.json`): their rectangle, plane, the viewports they clip and their depth; and the
+/// file's views, the Perspective viewport first.
+#[test]
+fn clipping_planes_are_read_as_in_rhino() {
+    let data = load("clipping.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("clipping.json")).unwrap()).unwrap();
+    let views: Vec<_> = file.views.iter().map(|v| (v.id.to_string(), v.name.clone(), v.perspective)).collect();
+    let rhino: Vec<_> = reference["views"].as_array().unwrap().iter().map(|v| (v["id"].as_str().unwrap().to_string(), v["name"].as_str().unwrap().to_string(), v["perspective"].as_bool().unwrap())).collect();
+    assert_eq!(views, rhino);
+    let point = |q: &serde_json::Value| DVec3::new(q[0].as_f64().unwrap(), q[1].as_f64().unwrap(), q[2].as_f64().unwrap());
+    let planes = reference["planes"].as_array().unwrap();
+    assert_eq!(planes.len(), 3);
+    for r in planes {
+        let name = r["name"].as_str().unwrap();
+        let o = file.objects.iter().find(|o| o.attributes.name == name).unwrap_or_else(|| panic!("{name}"));
+        let Geometry::ClippingPlane(p) = &o.geometry else { panic!("{name}: not a clipping plane") };
+        assert!(p.origin.distance(point(&r["origin"])) < 1e-9, "{name}");
+        assert!(p.normal.distance(point(&r["normal"])) < 1e-9, "{name}");
+        for (c, q) in p.corners.iter().zip(r["corners"].as_array().unwrap()) {
+            assert!(c.distance(point(q)) < 1e-9, "{name}: {c} {q}");
+        }
+        let viewports: Vec<String> = p.viewports.iter().map(|v| v.to_string()).collect();
+        let rhino: Vec<String> = r["viewports"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert_eq!(viewports, rhino, "{name}");
+        assert_eq!(p.depth, r["depth"].as_f64(), "{name}");
+        assert!(p.enabled && p.selection.is_none(), "{name}");
+    }
+}

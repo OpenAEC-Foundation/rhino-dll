@@ -28,7 +28,8 @@ read by table. Each `Object` has its `Attributes` (id, name, layer, material, co
 sources, visibility, mode and space), its user text and its `Geometry`: `Meshes` (with the
 object type to show), `Lines` (polylines), `Points` (borrowed from the file, read when used),
 `Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions
-and leaders) or `Skipped` (with the reason).
+and leaders), `ClippingPlane` or `Skipped` (with the reason). `File.views` are the viewports of
+its views, the active one first.
 
 ## threedm-read: from tables to geometry
 
@@ -56,7 +57,12 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   annotation's plane and their dimension style (read in full: sizes, formats, arrowheads, landing,
   text location, length display): extension lines, dimension lines and arcs, arrowheads, the
   value set in the font; one `Geometry::Drawing` of lines and meshes per object;
-- point clouds, points and block instances as they are.
+- point clouds, points and block instances as they are;
+- clipping planes (`ON_ClippingPlaneSurface`): the rectangle of their plane surface, the plane
+  (its normal points to the side cut away), enabled, the viewports they clip, their depth and
+  the objects and layers they clip (Rhino 8's selective clipping), and the viewports of the
+  file's views (`TCODE_SETTINGS_VIEW_LIST`: id, name, perspective; the active one first) to match
+  them with.
 
 Limits: at most `MAX_VERTICES` mesh vertices are read from a file and at most 120 000 SubD faces
 are made per object; what goes beyond is left out with the reason.

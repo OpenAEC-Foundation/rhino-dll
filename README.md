@@ -18,7 +18,8 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   lines. Dimensions (linear, aligned, angular, radius, diameter, ordinate), centre marks and
   leaders are drawn as Rhino draws them: extension lines, dimension lines and arcs, arrowheads of
   the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
-  and text).
+  and text). Clipping planes come with their rectangle, plane, depth, the objects they clip
+  (selective clipping) and the viewports they clip, and the file's views with them.
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
   layers) is up to the program that uses it; Open BIM Suite's Rhino loader is an example.
