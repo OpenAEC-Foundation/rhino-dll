@@ -53,11 +53,14 @@ pub struct Options {
     /// The TrueType or OpenType font texts are set in (by their capital height); without one,
     /// texts are left out.
     pub font: Option<&'static [u8]>,
+    /// The font file of a font the file names (family, bold, italic), when the caller has it:
+    /// each text, dimension and leader is then set in its own font, else in `font`.
+    pub resolve_font: Option<fn(&threedm_model::Font) -> Option<&'static [u8]>>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { font: if cfg!(feature = "font") { Some(FONT) } else { None } }
+        Options { font: if cfg!(feature = "font") { Some(FONT) } else { None }, resolve_font: None }
     }
 }
 
@@ -78,7 +81,11 @@ struct Reader<'a> {
 struct Drafting {
     patterns: Vec<drafting::HatchPattern>,
     dim_styles: Vec<drafting::DimStyle>,
-    font: Option<&'static [u8]>,
+    /// The font the object being read is set in: its own when the caller resolves it, else
+    /// `default_font`.
+    font: std::cell::Cell<Option<&'static [u8]>>,
+    default_font: Option<&'static [u8]>,
+    resolve_font: Option<fn(&threedm_model::Font) -> Option<&'static [u8]>>,
     /// Metres per model unit, for lengths shown in other units.
     meters: f64,
     /// The document's annotation settings (Rhino 2 and 3), for annotations without a style.
@@ -96,7 +103,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     let version: u32 = std::str::from_utf8(&header[24..32]).ok().and_then(|s| s.trim().parse().ok()).ok_or("Rhino 3dm: the header has no version")?;
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
-    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001, document_style: None, fonts: Vec::new() }, vertices: 0 };
+    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: std::cell::Cell::new(options.font), default_font: options.font, resolve_font: options.resolve_font, meters: 0.001, document_style: None, fonts: Vec::new() }, vertices: 0 };
     if version < 2 {
         // Rhino 1: top-level chunks of its own
         v1::read(top, &mut r.file, &mut r.vertices)?;
@@ -895,6 +902,8 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
         }
     }
     let font = object.as_ref().and_then(|o| fonts::object_font(o.class, o.data.clone(), &drafting.dim_styles, &drafting.fonts));
+    // set in its own font when the caller has it
+    drafting.font.set(font.as_ref().and_then(|f| drafting.resolve_font.and_then(|resolve| resolve(f))).or(drafting.default_font));
     let geometry = match object {
         Some(object) => {
             // a hatch's background fill and boundary are in its attributes
@@ -1174,7 +1183,7 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
             Ok(text) => {
                 // in its dimension style's text height and model space scale
                 let style = d.dim_styles.iter().find(|s| s.id == text.style()).or(d.dim_styles.first());
-                match d.font {
+                match d.font.get() {
                     Some(font) => Geometry::Meshes(text.mesh(style, font).into_iter().collect(), "Text"),
                     None => Geometry::Skipped("texts (no font to set them in)"),
                 }
@@ -1202,14 +1211,14 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
     }
     if dimensions::V2_ANNOTATIONS.contains(&class) {
         let style = d.document_style.clone().unwrap_or_default();
-        return Ok(match dimensions::read_v2(&mut c, &style, d.font.unwrap_or(&[]), d.meters) {
+        return Ok(match dimensions::read_v2(&mut c, &style, d.font.get().unwrap_or(&[]), d.meters) {
             Ok(drawing) if drawing.kind == "Text" => Geometry::Meshes(drawing.meshes, "Text"),
             Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
             Err(_) => Geometry::Skipped("Rhino 2 annotations that could not be read"),
         });
     }
     if dimensions::V5_ANNOTATIONS.contains(&class) {
-        return Ok(match dimensions::read_v5(&mut c, &d.dim_styles, d.font.unwrap_or(&[]), d.meters) {
+        return Ok(match dimensions::read_v5(&mut c, &d.dim_styles, d.font.get().unwrap_or(&[]), d.meters) {
             Ok(drawing) if drawing.kind == "Text" => Geometry::Meshes(drawing.meshes, "Text"),
             Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
             Err(_) => Geometry::Skipped("Rhino 5 annotations that could not be read"),
@@ -1222,7 +1231,7 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         });
     }
     if dimensions::is_annotation(class) {
-        return Ok(match dimensions::read(class, &mut c, &d.dim_styles, d.font.unwrap_or(&[]), d.meters) {
+        return Ok(match dimensions::read(class, &mut c, &d.dim_styles, d.font.get().unwrap_or(&[]), d.meters) {
             Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
             Err(_) => Geometry::Skipped("dimensions and leaders that could not be read"),
         });
@@ -1756,7 +1765,7 @@ mod tests {
         let mut c = Cur { data: &bytes, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
         let object = c.object().unwrap().unwrap();
         assert_eq!(text_dot_text(object.data.clone()).unwrap(), [("Text".to_string(), "A1".to_string()), ("Secondary text".to_string(), "Grid A, 1".to_string())]);
-        let drafting = Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001, document_style: None, fonts: Vec::new() };
+        let drafting = Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: std::cell::Cell::new(None), default_font: None, resolve_font: None, meters: 0.001, document_style: None, fonts: Vec::new() };
         let Geometry::Points { points, kind, .. } = read_geometry(object, 0x2000, &mut 0, &drafting).unwrap() else { panic!("not a point") };
         assert_eq!((points, kind), (&f64s(&[1.0, 2.0, 3.0])[..], "Text dot"));
     }

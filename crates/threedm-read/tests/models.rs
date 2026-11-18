@@ -961,3 +961,29 @@ fn settings_of_the_opennurbs_examples_are_read() {
     eprintln!("{fonts} fonts, {styles_with_fonts} styles with a font, {texts_with_fonts} texts with a font, {tables} user tables");
     assert!(fonts > 0 && styles_with_fonts > 0 && texts_with_fonts > 0 && tables > 0);
 }
+
+/// A caller that has the fonts of the file sets each text in its own: given a font file for
+/// "Times New Roman" only (here one that is no font, so the text comes out empty), the Times
+/// texts take it and the others the default font.
+#[test]
+fn texts_are_set_in_the_font_the_caller_gives_for_theirs() {
+    fn resolve(font: &threedm_read::Font) -> Option<&'static [u8]> {
+        (font.family == "Times New Roman").then_some(b"not a font".as_slice())
+    }
+    let data = load("settings.3dm");
+    let options = threedm_read::Options { resolve_font: Some(resolve), ..threedm_read::Options::default() };
+    let file = threedm_read::read_with(&data, &options).unwrap();
+    let mut seen = (0, 0);
+    for o in &file.objects {
+        let (Some(font), Geometry::Meshes(meshes, "Text")) = (&o.font, &o.geometry) else { continue };
+        let drawn = meshes.iter().any(|m| !m.faces.is_empty());
+        if font.family == "Times New Roman" {
+            assert!(!drawn, "a Times text set in the default font");
+            seen.0 += 1;
+        } else {
+            assert!(drawn, "{} not set", font.family);
+            seen.1 += 1;
+        }
+    }
+    assert!(seen.0 > 0 && seen.1 > 0, "{seen:?}");
+}
