@@ -987,3 +987,209 @@ fn texts_are_set_in_the_font_the_caller_gives_for_theirs() {
     }
     assert!(seen.0 > 0 && seen.1 > 0, "{seen:?}");
 }
+
+/// Rendering data (`render.3dm`, from make_render.py) as Rhino 9 reads it (`render.json`): the
+/// render settings with the environments, ground plane, sun (at a date and place), skylight,
+/// linear workflow, dithering, safe frame and render channels; every render material,
+/// environment and texture with its parameters; the render materials of the materials, layers
+/// and objects; the decal on a box and the mesh modifiers of four objects.
+#[test]
+fn rendering_is_read_as_in_rhino() {
+    use threedm_read::RenderValue;
+    let data = load("render.3dm");
+    let file = read(&data).unwrap();
+    assert!(file.damaged.is_empty(), "{:?}", file.damaged);
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("render.json")).unwrap()).unwrap();
+    let f = |v: &serde_json::Value| v.as_f64().unwrap();
+    let b = |v: &serde_json::Value| v.as_bool().unwrap();
+    let i = |v: &serde_json::Value| v.as_i64().unwrap();
+    let s = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
+    let near = |a: f64, v: &serde_json::Value, what: &str| assert!((a - f(v)).abs() < 1e-9, "{what}: {a} {v}");
+    let arr = |v: &serde_json::Value| v.as_array().unwrap().iter().map(f).collect::<Vec<_>>();
+    // System.Drawing colours: alpha 255 opaque; openNURBS: 0 opaque
+    let rgba = |c: [u8; 4]| vec![c[0] as f64, c[1] as f64, c[2] as f64, 255.0 - c[3] as f64];
+
+    let rs = &file.render;
+    let x = &r["render_settings"];
+    assert_eq!(rs.custom_image_size, !b(&x["use_viewport_size"]));
+    assert_eq!([rs.image_width as i64, rs.image_height as i64], [i(&x["image_size"][0]), i(&x["image_size"][1])]);
+    near(rs.image_dpi, &x["image_dpi"], "dpi");
+    assert_eq!(rs.image_unit as i64, i(&x["image_unit_system"]));
+    assert_eq!(rgba(rs.ambient), arr(&x["ambient_light"]));
+    assert_eq!(rgba(rs.background_color), arr(&x["background_color_top"]));
+    assert_eq!(rgba(rs.background_bottom_color), arr(&x["background_color_bottom"]));
+    assert_eq!(rs.background_style as i64, i(&x["background_style"]));
+    for (ours, field) in [
+        (rs.use_hidden_lights, "use_hidden_lights"),
+        (rs.depth_cue, "depth_cue"),
+        (rs.flat_shade, "flat_shade"),
+        (rs.render_backfaces, "render_backfaces"),
+        (rs.render_points, "render_points"),
+        (rs.render_curves, "render_curves"),
+        (rs.render_isoparams, "render_isoparams"),
+        (rs.render_mesh_edges, "render_mesh_edges"),
+        (rs.render_annotations, "render_annotations"),
+        (rs.scale_background_to_fit, "scale_background_to_fit"),
+        (rs.transparent_background, "transparent_background"),
+    ] {
+        assert_eq!(ours, b(&x[field]), "{field}");
+    }
+    assert_eq!((rs.antialias as i64, rs.shadowmap as i64, rs.rendering_source as i64), (i(&x["antialias_level"]), i(&x["shadowmap_level"]), i(&x["render_source"])));
+    assert_eq!((rs.named_view.clone(), rs.snapshot.clone(), rs.specific_viewport.clone()), (s(&x["named_view"]), s(&x["snapshot"]), s(&x["specific_viewport"])));
+
+    let env = &r["environments"];
+    assert_eq!(rs.background_environment.to_string(), s(&env["background"]["id"]));
+    assert_eq!((rs.reflection_environment_on, rs.reflection_environment.to_string()), (b(&env["reflection"]["override"]), s(&env["reflection"]["id"])));
+    assert_eq!((rs.skylight.environment_on, rs.skylight.environment.to_string()), (b(&env["skylighting"]["override"]), s(&env["skylighting"]["id"])));
+
+    let g = (&rs.ground_plane, &r["ground_plane"]);
+    assert_eq!((g.0.on, g.0.auto_altitude, g.0.shadow_only, g.0.show_underside), (b(&g.1["enabled"]), b(&g.1["auto_altitude"]), b(&g.1["shadow_only"]), b(&g.1["show_underside"])));
+    near(g.0.altitude, &g.1["altitude"], "ground plane altitude");
+    assert_eq!(g.0.material.to_string(), s(&g.1["material"]));
+    assert_eq!((g.0.texture_offset.to_vec(), g.0.texture_size.to_vec()), (arr(&g.1["texture_offset"]), arr(&g.1["texture_size"])));
+    near(g.0.texture_rotation, &g.1["texture_rotation"], "ground plane rotation");
+    assert_eq!((g.0.texture_offset_locked, g.0.texture_size_locked), (b(&g.1["texture_offset_locked"]), b(&g.1["texture_size_locked"])));
+
+    let (sun, y) = (&rs.sun, &r["sun"]);
+    assert_eq!((sun.on, sun.manual, sun.daylight_saving_on, sun.daylight_saving_minutes as i64), (b(&y["enabled"]), b(&y["manual_control"]), b(&y["daylight_saving_on"]), i(&y["daylight_saving_minutes"])));
+    for (ours, field) in [(sun.azimuth, "azimuth"), (sun.altitude, "altitude"), (sun.north, "north"), (sun.latitude, "latitude"), (sun.longitude, "longitude"), (sun.time_zone, "time_zone"), (sun.intensity, "intensity")] {
+        near(ours, &y[field], field);
+    }
+    let local = arr(&y["local"]);
+    assert_eq!([sun.year as f64, sun.month as f64, sun.day as f64], local[..3]);
+    assert!((sun.hours - (local[3] + local[4] / 60.0 + local[5] / 3600.0)).abs() < 1e-9);
+    let diffuse: Vec<u8> = arr(&y["light_diffuse"]).iter().map(|c| *c as u8).collect();
+    assert_eq!(sun.color.map(|c| (c * 255.0).round() as u8)[..3], diffuse[..3]);
+    let direction = arr(&y["light_direction"]);
+    assert!((0..3).all(|k| (sun.direction[k] - direction[k]).abs() < 1e-9), "{:?} {direction:?}", sun.direction);
+
+    let k = &r["skylight"];
+    assert_eq!(rs.skylight.on, b(&k["enabled"]));
+    near(rs.skylight.shadow_intensity, &k["shadow_intensity"], "skylight shadow");
+    let lw = &r["linear_workflow"];
+    assert_eq!((rs.linear_workflow.pre_process, rs.linear_workflow.pre_process, rs.linear_workflow.post_process), (b(&lw["pre_process_colors"]), b(&lw["pre_process_textures"]), b(&lw["post_process_gamma_on"])));
+    assert!((rs.linear_workflow.gamma - f(&lw["post_process_gamma"])).abs() < 1e-6);
+    let method = if s(&r["dithering"]["method_name"]) == "FloydSteinberg" { "floyd-steinberg" } else { "simple-noise" };
+    assert_eq!((rs.dithering.on, rs.dithering.method), (b(&r["dithering"]["enabled"]), method));
+    let (sf, z) = (&rs.safe_frame, &r["safe_frame"]);
+    assert_eq!((sf.on, sf.perspective_only, sf.field_grid_on, sf.live_frame_on), (b(&z["enabled"]), b(&z["perspective_only"]), b(&z["fields_on"]), b(&z["live_frame_on"])));
+    for (frame, name) in [(&sf.action_frame, "action"), (&sf.title_frame, "title")] {
+        assert_eq!((frame.on, frame.linked), (b(&z[format!("{name}_frame_on")]), b(&z[format!("{name}_frame_linked")])), "{name}");
+        near(frame.x_scale, &z[format!("{name}_frame_x_scale")], name);
+        near(frame.y_scale, &z[format!("{name}_frame_y_scale")], name);
+    }
+    let channels = &r["render_channels"];
+    assert_eq!(rs.render_channels_custom, i(&channels["mode"]) != 0);
+    assert_eq!(rs.render_channels.iter().map(|u| u.to_string()).collect::<Vec<_>>(), channels["custom"].as_array().unwrap().iter().map(s).collect::<Vec<_>>());
+    assert_eq!(rs.post_effects.len(), r["post_effects"].as_array().unwrap().len());
+
+    // render content: every one, with its parameters
+    let contents = r["render_content"].as_array().unwrap();
+    assert_eq!(file.render_content.len(), contents.len());
+    let mut compared = 0;
+    for c in contents {
+        let ours = file.render_content.iter().find(|o| o.id.to_string() == s(&c["id"])).unwrap_or_else(|| panic!("{}", c["id"]));
+        let name = s(&c["name"]);
+        assert_eq!((ours.kind, ours.name.as_str()), (s(&c["kind"]).as_str(), name.as_str()));
+        assert_eq!((ours.type_name.clone(), ours.type_id.to_string()), (s(&c["type_name"]), s(&c["type_id"])), "{name}");
+        assert_eq!((ours.render_engine.to_string(), ours.plug_in.to_string(), ours.group.to_string()), (s(&c["render_engine_id"]), s(&c["plug_in_id"]), s(&c["group_id"])), "{name}");
+        assert_eq!((ours.notes.clone(), ours.tags.clone(), ours.child_slot.clone()), (s(&c["notes"]), s(&c["tags"]), s(&c["child_slot_name"])), "{name}");
+        assert_eq!((ours.hidden, ours.reference, ours.auto_delete), (b(&c["hidden"]), b(&c["reference"]), b(&c["auto_delete"])), "{name}");
+        let parent = if ours.parent.is_nil() { String::new() } else { ours.parent.to_string() };
+        assert_eq!(parent, s(&c["parent"]), "{name}");
+        assert_eq!(ours.children.iter().map(|u| u.to_string()).collect::<Vec<_>>(), c["children"].as_array().unwrap().iter().map(s).collect::<Vec<_>>(), "{name}");
+        for (param, v) in c["parameters"].as_object().unwrap() {
+            let Some(mine) = ours.parameter(param) else { panic!("{name} {param}") };
+            if v.is_null() {
+                // a parameter without a value (an empty child slot)
+                assert!(matches!(mine, RenderValue::Null | RenderValue::Text(_)), "{name} {param}: {mine:?}");
+                continue;
+            }
+            let value = &v["value"];
+            match (v["type"].as_str().unwrap_or_default(), mine) {
+                ("Bool", RenderValue::Bool(m)) => assert_eq!(*m, b(value), "{name} {param}"),
+                ("Integer", RenderValue::Integer(m)) => assert_eq!(*m, i(value), "{name} {param}"),
+                ("Double" | "Float", RenderValue::Number(m)) => assert!((m - f(value)).abs() <= 1e-6 * f(value).abs().max(1.0), "{name} {param}: {m} {value}"),
+                ("Color", RenderValue::Color(m)) => assert!(m.iter().zip(arr(value)).all(|(a, b)| (*a as f64 - b).abs() < 1e-6), "{name} {param}: {m:?} {value}"),
+                ("Vector3d" | "Vector2d" | "Point4d", RenderValue::Numbers(m)) => assert!(m.iter().zip(arr(value)).all(|(a, b)| (a - b).abs() < 1e-9), "{name} {param}: {m:?} {value}"),
+                // RhinoCommon gives no text of a string variant
+                ("String", RenderValue::Text(_) | RenderValue::Null) => continue,
+                (t, m) => panic!("{name} {param}: {t} {m:?}"),
+            }
+            compared += 1;
+        }
+    }
+    assert!(compared > 200, "{compared}");
+    for kind in ["material", "environment", "texture"] {
+        assert!(file.render_content.iter().any(|c| c.kind == kind), "{kind}");
+    }
+    // a child in a slot: the bitmap texture of the custom material
+    let tiles = file.render_content.iter().find(|c| c.name == "Tiles").unwrap();
+    let tile = file.render_content.iter().find(|c| c.parent == tiles.id).unwrap();
+    assert_eq!((tile.child_slot.as_str(), tile.kind), ("bitmap-texture", "texture"));
+
+    // the materials Rhino made for the render materials, and who uses them
+    for m in r["materials"].as_array().unwrap() {
+        let ours = file.materials.iter().find(|o| o.name == s(&m["name"])).unwrap();
+        assert_eq!((ours.id.to_string(), ours.render_material.to_string()), (s(&m["id"]), s(&m["render_material"])));
+        assert_eq!(file.render_material(ours.index).map(|c| c.name.as_str()), Some(ours.name.as_str()));
+    }
+    for l in r["layers"].as_array().unwrap() {
+        assert_eq!(file.layers.iter().find(|o| o.name == s(&l["name"])).unwrap().material as i64, i(&l["material"]));
+    }
+    let used: HashMap<String, String> = file.objects.iter().map(|o| (o.attributes.name.clone(), file.render_material(file.object_material(o)).map(|c| c.name.clone()).unwrap_or_default())).collect();
+    assert_eq!((used["Decal box"].as_str(), used["Displaced box"].as_str(), used["Thick surface"].as_str(), used["Piped curve"].as_str()), ("Brushed copper", "Wall plaster", "Tiles", ""));
+
+    // decals and mesh modifiers
+    for o in r["objects"].as_array().unwrap() {
+        let name = s(&o["name"]);
+        let a = &file.objects.iter().find(|x| x.attributes.id.to_string() == s(&o["id"])).unwrap().attributes;
+        assert_eq!((a.material as i64, a.material_source as i64), (i(&o["material"]), i(&o["material_source"])), "{name}");
+        let decals = o["decals"].as_array().unwrap();
+        assert_eq!(a.decals.len(), decals.len(), "{name}");
+        for (d, x) in a.decals.iter().zip(decals) {
+            assert_eq!((d.texture.to_string(), d.mapping.clone(), d.projection.clone()), (s(&x["texture"]), s(&x["mapping_name"]).to_lowercase(), s(&x["projection_name"]).to_lowercase()));
+            assert_eq!((d.map_to_inside, d.visible), (b(&x["map_to_inside"]), b(&x["visible"])));
+            for (ours, field) in [(d.transparency, "transparency"), (d.height, "height"), (d.radius, "radius")] {
+                near(ours, &x[field], field);
+            }
+            assert_eq!((d.origin.to_vec(), d.vector_up.to_vec(), d.vector_across.to_vec()), (arr(&x["origin"]), arr(&x["vector_up"]), arr(&x["vector_across"])));
+            assert_eq!((d.horizontal_sweep.to_vec(), d.vertical_sweep.to_vec(), d.uv_bounds.to_vec()), (arr(&x["horz_sweep"]), arr(&x["vert_sweep"]), arr(&x["uv_bounds"])));
+        }
+        let m = &o["mesh_modifiers"];
+        let mm = &a.mesh_modifiers;
+        assert_eq!(mm.displacement.is_some(), m.get("displacement").is_some(), "{name}");
+        if let (Some(d), Some(x)) = (&mm.displacement, m.get("displacement")) {
+            assert_eq!((d.on, d.texture.to_string(), d.mapping_channel as i64), (b(&x["on"]), s(&x["texture"]), i(&x["channel"])));
+            let ints = [d.sweep_pitch, d.refine_steps, d.face_limit, d.fairing, d.memory_limit, d.sweep_formula].map(i64::from);
+            assert_eq!(ints, ["sweep_pitch", "refine_steps", "face_limit", "fairing", "memory_limit", "sweep_formula"].map(|k| i(&x[k])));
+            assert_eq!((d.face_limit_on, d.fairing_on), (b(&x["face_limit_on"]), b(&x["fairing_on"])));
+            for (ours, field) in [(d.black_point, "black_point"), (d.white_point, "white_point"), (d.refine_sensitivity, "refine_sensitivity"), (d.post_weld_angle, "post_weld_angle")] {
+                near(ours, &x[field], field);
+            }
+        }
+        assert_eq!(mm.edge_softening.is_some(), m.get("edge_softening").is_some(), "{name}");
+        if let (Some(e), Some(x)) = (&mm.edge_softening, m.get("edge_softening")) {
+            assert_eq!((e.on, e.chamfer, e.faceted, e.force_softening), (b(&x["on"]), b(&x["chamfer"]), b(&x["faceted"]), b(&x["force_softening"])));
+            near(e.softening, &x["softening"], "softening");
+            near(e.edge_angle_threshold, &x["edge_angle_threshold"], "threshold");
+        }
+        assert_eq!(mm.thickening.is_some(), m.get("thickening").is_some(), "{name}");
+        if let (Some(t), Some(x)) = (&mm.thickening, m.get("thickening")) {
+            assert_eq!((t.on, t.solid, t.offset_only, t.both_sides), (b(&x["on"]), b(&x["solid"]), b(&x["offset_only"]), b(&x["both_sides"])));
+            near(t.distance, &x["distance"], "distance");
+        }
+        assert_eq!(mm.curve_piping.is_some(), m.get("curve_piping").is_some(), "{name}");
+        if let (Some(p), Some(x)) = (&mm.curve_piping, m.get("curve_piping")) {
+            assert_eq!((p.on, p.faceted, p.segments as i64, p.accuracy as i64, p.cap_type.to_string()), (b(&x["on"]), b(&x["faceted"]), i(&x["segments"]), i(&x["accuracy"]), s(&x["cap_name"]).to_lowercase()));
+            near(p.radius, &x["radius"], "radius");
+        }
+        assert_eq!(mm.shut_lining.is_some(), m.get("shut_lining").is_some(), "{name}");
+        if let (Some(l), Some(x)) = (&mm.shut_lining, m.get("shut_lining")) {
+            assert_eq!((l.on, l.faceted, l.auto_update, l.force_update, l.curves.len()), (b(&x["on"]), b(&x["faceted"]), b(&x["auto_update"]), b(&x["force_update"]), x["curves"].as_array().unwrap().len()));
+        }
+    }
+    let with = |f: fn(&threedm_read::MeshModifiers) -> bool| file.objects.iter().filter(|o| f(&o.attributes.mesh_modifiers)).count();
+    assert_eq!([with(|m| m.displacement.is_some()), with(|m| m.edge_softening.is_some()), with(|m| m.thickening.is_some()), with(|m| m.curve_piping.is_some()), with(|m| m.shut_lining.is_some())], [1; 5]);
+    assert_eq!(file.objects.iter().map(|o| o.attributes.decals.len()).sum::<usize>(), 1);
+}

@@ -34,7 +34,12 @@
 //!   text, named layer states, snapshots, dimension styles with their fonts, the font table and
 //!   the plug-in tables (by plug-in, with their size);
 //! - `{"query": "history"}`: the history records: command, version, the objects they were made
-//!   from and made, their values by id and type.
+//!   from and made, their values by id and type;
+//! - `{"query": "render_content"}`: the render materials, environments and textures of the RDK
+//!   document with their parameters (each followed by the content in its child slots); `info`
+//!   has the render settings (`render`: background, environments, ground plane, sun, skylight,
+//!   ..) and objects their `render_material` (the id of the render content their material
+//!   simulates), `decals` and `mesh_modifiers`.
 
 use std::ffi::{c_char, CStr, CString};
 
@@ -42,6 +47,8 @@ mod settings;
 
 use serde_json::{json, Value};
 use threedm_read::{Document, File, Geometry, Light, LightKind, LineCap, LineJoin, Linetype, Material, Mesh, RhinoObject, SectionStyle, Stroke};
+
+mod render;
 
 /// An open document behind the C ABI.
 pub struct ThreedmDocument(Document);
@@ -67,7 +74,7 @@ fn kind(o: &RhinoObject<'_>) -> String {
     }
 }
 
-fn object_summary(o: &RhinoObject<'_>) -> Value {
+fn object_summary(file: &File<'_>, o: &RhinoObject<'_>) -> Value {
     let a = &o.attributes;
     let user: serde_json::Map<String, Value> = o.user.iter().map(|(k, v)| (k.clone(), Value::from(v.as_str()))).collect();
     json!({
@@ -99,6 +106,9 @@ fn object_summary(o: &RhinoObject<'_>) -> Value {
         "clipping_label": a.clipping_label,
         "stroke": o.stroke.as_ref().map(stroke_json),
         "user_text": user,
+        "render_material": file.render_material(file.object_material(o)).map(|c| c.id.to_string()),
+        "decals": a.decals.iter().map(render::decal).collect::<Vec<_>>(),
+        "mesh_modifiers": render::modifiers(&a.mesh_modifiers),
     })
 }
 
@@ -176,7 +186,8 @@ fn material_json(m: &Material) -> Value {
         })
     });
     json!({
-        "index": m.index, "name": m.name,
+        "index": m.index, "name": m.name, "id": m.id.to_string(), "plug_in": m.plug_in.to_string(),
+        "render_material": (!m.render_material.is_nil()).then(|| m.render_material.to_string()),
         "ambient": m.ambient, "diffuse": m.diffuse, "emission": m.emission, "specular": m.specular,
         "reflection": m.reflection, "transparent": m.transparent,
         "shine": m.shine, "reflectivity": m.reflectivity, "index_of_refraction": m.index_of_refraction,
@@ -286,6 +297,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "model_basepoint": file.settings.model_basepoint.to_array(),
                 "dim_styles": settings::dim_styles_json(file),
                 "history_records": file.history.len(),
+                "render": render::settings(&file.render),
+                "render_content": file.render_content.len(),
                 "damaged": file.damaged,
             }))
         }
@@ -310,20 +323,21 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
         "lights" => Ok(file.lights.iter().map(light_json).collect()),
         "settings" => Ok(settings::settings_json(file)),
         "history" => Ok(file.history.iter().map(settings::history_json).collect()),
+        "render_content" => Ok(file.render_content.iter().map(render::content).collect()),
         "objects" => {
             let limit = req.get("limit").and_then(Value::as_u64).map_or(usize::MAX, |n| n as usize);
             let offset = req.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let objects: Vec<Value> = file.objects.iter().skip(offset).take(limit).map(object_summary).collect();
+            let objects: Vec<Value> = file.objects.iter().skip(offset).take(limit).map(|o| object_summary(file, o)).collect();
             Ok(json!({"total": file.objects.len(), "objects": objects}))
         }
         "object" => {
             let id = req.get("id").and_then(Value::as_str).ok_or("\"object\" needs an \"id\" (a uuid)")?;
             let o = file.objects.iter().find(|o| o.attributes.id.to_string().eq_ignore_ascii_case(id)).ok_or_else(|| format!("no object {id}"))?;
-            let mut v = object_summary(o);
+            let mut v = object_summary(file, o);
             v["geometry"] = geometry_json(&o.geometry);
             Ok(v)
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object, settings, history)")),
+        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object, settings, history, render_content)")),
     }
 }
 

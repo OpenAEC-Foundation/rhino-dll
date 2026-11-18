@@ -32,6 +32,13 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   named layer states and snapshots, and every plug-in's table as stored; the font of each text,
   dimension and leader (of its first character) and of each dimension style, and the font table
   of Rhino 4 and 5 files. Texts are still set in the one font they are given.
+- Rendering: the render settings (image size, ambient and background colours, background style
+  and wallpaper, the environments of the background, reflections and skylight) with the parts of
+  the RDK document (ground plane, sun by hand or by date, time and place, skylight, linear
+  workflow, dithering, safe frame, post effects, render channels); every render material,
+  environment and texture with its parameters, and which material, layer and object uses which;
+  the decals and mesh modifiers (displacement, edge softening, thickening, curve piping, shut
+  lining) of objects. The meshes are not changed by them.
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
   layers) is up to the program that uses it; Open BIM Suite's Rhino loader is an example.
@@ -79,7 +86,7 @@ threedm_free(info);
 threedm_close(doc);
 ```
 
-Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`),
+Requests: `info`, `layers`, `materials`, `blocks`, `lights`, `render_content`, `objects` (with `limit` and `offset`),
 `object` (by `id`, with its geometry), `settings` and `history`; see
 `crates/threedm-ffi/src/lib.rs`.
 

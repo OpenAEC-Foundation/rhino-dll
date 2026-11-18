@@ -1,7 +1,7 @@
 //! JSON of the document settings, fonts, dimension styles, history records and plug-in tables.
 
 use serde_json::{json, Value};
-use threedm_read::{ConstructionPlane, EarthAnchor, File, Font, GridDefaults, HistoryData, HistoryRecord, MeshSettings, PlugIn, RenderSettings, Settings};
+use threedm_read::{ConstructionPlane, EarthAnchor, File, Font, GridDefaults, HistoryData, HistoryRecord, MeshSettings, PlugIn, DocumentRenderSettings, Settings};
 
 pub(crate) fn font_json(f: &Font) -> Value {
     json!({"family": f.family, "face": f.face, "postscript": f.postscript, "logfont": f.logfont, "weight": f.weight, "style": f.style, "bold": f.bold, "italic": f.italic, "underlined": f.underlined, "strikeout": f.strikeout})
@@ -38,7 +38,7 @@ fn grid_json(g: &GridDefaults) -> Value {
     json!({"grid_spacing": g.grid_spacing, "snap_spacing": g.snap_spacing, "grid_line_count": g.grid_line_count, "thick_frequency": g.thick_frequency, "show_grid": g.show_grid, "show_axes": g.show_axes, "show_world_axes": g.show_world_axes})
 }
 
-fn render_json(r: &RenderSettings) -> Value {
+fn render_json(r: &DocumentRenderSettings) -> Value {
     json!({
         "custom_image_size": r.custom_image_size, "image_width": r.image_width, "image_height": r.image_height, "image_dpi": r.image_dpi,
         "image_unit": r.image_unit, "ambient": r.ambient, "background_style": r.background_style, "background_color": r.background_color,

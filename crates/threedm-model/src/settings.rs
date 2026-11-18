@@ -118,7 +118,7 @@ pub struct MeshSettings {
 
 /// The render settings of the document (`ON_3dmRenderSettings`).
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct RenderSettings {
+pub struct DocumentRenderSettings {
     pub custom_image_size: bool,
     pub image_width: i32,
     pub image_height: i32,
@@ -219,7 +219,7 @@ pub struct Settings {
     pub analysis_mesh: Option<MeshSettings>,
     pub custom_render_mesh: Option<MeshSettings>,
     pub grid: Option<GridDefaults>,
-    pub render: Option<RenderSettings>,
+    pub render: Option<DocumentRenderSettings>,
     pub current: Current,
     pub linetype_display_scale: f64,
     pub active_view: Uuid,

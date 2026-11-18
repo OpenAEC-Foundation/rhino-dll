@@ -100,6 +100,17 @@ Beside the objects:
   (`ON_TextStyle`), and the font of a text, dimension or leader: its rich text's font table and
   the `\f`, `\b` and `\i` in force at its first character, else its own style's or its
   dimension style's font.
+Rendering (`render`, with the small XML reader `xml`): `TCODE_SETTINGS_RENDER`
+(`ON_3dmRenderSettings`, the Rhino 2 to 5 list or the Rhino 6 chunk); the user table of the RDK
+plug-in, an XML document (`render-content-manager-document`) of the environments, ground plane,
+sun, skylight, linear workflow, dithering, safe frame, post effects and render channels, and the
+render content (`material-section`, `environment-section`, `texture-section`: each content's
+properties, its parameters (the V8 section, else the older one), its simulation and the content
+in its child slots). The sun's position at a date and place is computed as openNURBS does
+(`ON_SunEngine`), its colour from its altitude. Materials keep the id of the render content they
+simulate; `File::render_material` and `File::object_material` link objects and layers to it. Of
+objects the XML user data: decals (`ON_RdkUserData`) and mesh modifiers (displacement, edge
+softening, thickening, curve piping, shut lining), on `Attributes`; the meshes stay as stored.
 
 Limits: at most `MAX_VERTICES` mesh vertices are read from a file and at most 120 000 SubD faces
 are made per object; what goes beyond is left out with the reason.

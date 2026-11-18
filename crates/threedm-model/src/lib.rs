@@ -9,6 +9,8 @@ pub use threedm_core::{Uuid, Versions};
 
 mod settings;
 pub use settings::*;
+mod render;
+pub use render::*;
 
 /// A layer (`ON_Layer`); its full path follows the parents by id.
 #[derive(Debug, Clone, Default)]
@@ -172,6 +174,11 @@ impl Default for SectionStyle {
 pub struct Material {
     pub index: i32,
     pub name: String,
+    pub id: Uuid,
+    /// The plug-in it belongs to (the RDK's for materials made by render content).
+    pub plug_in: Uuid,
+    /// The render content it simulates ([`RenderContent::id`]), nil if none.
+    pub render_material: Uuid,
     pub ambient: [u8; 4],
     pub diffuse: [u8; 4],
     pub emission: [u8; 4],
@@ -313,6 +320,10 @@ pub struct Attributes {
     pub custom_section_style: Option<SectionStyle>,
     /// A clipping plane's label: 0 none, 1 a text dot of its name, 2 a text of its name.
     pub clipping_label: u8,
+    /// Its decals.
+    pub decals: Vec<Decal>,
+    /// Its mesh modifiers (only read: its meshes are as stored).
+    pub mesh_modifiers: MeshModifiers,
 }
 
 impl Default for Attributes {
@@ -347,6 +358,8 @@ impl Default for Attributes {
             section_style: -1,
             custom_section_style: None,
             clipping_label: 0,
+            decals: Vec::new(),
+            mesh_modifiers: MeshModifiers::default(),
         }
     }
 }
@@ -573,6 +586,11 @@ pub struct File<'a> {
     /// The named layer states, and the snapshots.
     pub layer_states: Vec<LayerState>,
     pub snapshots: Vec<Snapshot>,
+    /// The render settings, with the rendering parts of the RDK document.
+    pub render: RenderSettings,
+    /// The render content of the RDK document: materials, environments and textures, each
+    /// followed by the content in its child slots.
+    pub render_content: Vec<RenderContent>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

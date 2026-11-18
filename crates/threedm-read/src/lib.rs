@@ -32,12 +32,18 @@ mod fonts;
 mod lights;
 mod styles;
 mod settings;
+mod render;
 pub mod subd;
 pub mod tessellate;
 mod v1;
+mod xml;
 
 pub use document::Document;
-pub use threedm_model::{ConstructionPlane, DimensionStyle, EarthAnchor, Font, GridDefaults, HistoryData, HistoryRecord, LayerState, MeshSettings, PlugIn, RenderSettings, Settings, Snapshot, UserTable};
+pub use threedm_model::{ConstructionPlane, DimensionStyle, EarthAnchor, Font, GridDefaults, HistoryData, HistoryRecord, LayerState, MeshSettings, PlugIn, DocumentRenderSettings, Settings, Snapshot, UserTable};
+pub use threedm_model::{
+    CurvePiping, Decal, Displacement, Dithering, EdgeSoftening, GroundPlane, LinearWorkflow, MeshModifiers, PostEffect, RenderContent, RenderSettings,
+    RenderValue, SafeFrame, SafeFrameFrame, ShutLining, ShutLiningCurve, Skylight, Sun, Thickening,
+};
 pub use threedm_core::{Uuid, Versions, R};
 
 const MAGIC: &[u8] = b"3D Geometry File Format ";
@@ -109,6 +115,8 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
         v1::read(top, &mut r.file, &mut r.vertices)?;
         return Ok(r.file);
     }
+    // the RDK document (render content and settings), read once the settings are
+    let mut rdk = None;
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,
@@ -124,6 +132,21 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
         body.v = r.file.versions;
         match chunk.typecode {
             TCODE_ENDOFFILE => break,
+            render::TCODE_USER_TABLE => {
+                // the RDK document (rendering), and every plug-in's table as stored
+                match render::read_rdk_document(body.clone()) {
+                    Ok(Some(xml)) => rdk = Some(xml),
+                    Ok(None) => {}
+                    Err(_) => *r.file.damaged.entry("render content").or_default() += 1,
+                }
+                match settings::read_user_table(body) {
+                    Ok(t) => {
+                        settings::read_known_table(&t, r.file.versions, &mut r.file);
+                        r.file.user_tables.push(t);
+                    }
+                    Err(_) => *r.file.damaged.entry("user tables").or_default() += 1,
+                }
+            }
             TCODE_PROPERTIES_TABLE => read_properties(body, &mut r.file),
             TCODE_SETTINGS_TABLE => read_settings(body, &mut r.file, &mut r.drafting),
             TCODE_MATERIAL_TABLE => table(body, TCODE_MATERIAL_RECORD, &mut r, "materials", |mut c, f| {
@@ -197,13 +220,6 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 }
                 Ok(())
             }),
-            settings::TCODE_USER_TABLE => match settings::read_user_table(body) {
-                Ok(t) => {
-                    settings::read_known_table(&t, r.file.versions, &mut r.file);
-                    r.file.user_tables.push(t);
-                }
-                Err(_) => *r.file.damaged.entry("user tables").or_default() += 1,
-            },
             TCODE_LIGHT_TABLE => table(body, TCODE_LIGHT_RECORD, &mut r, "lights", |c, f| {
                 if f.file.lights.len() < MAX_LIGHTS {
                     f.file.lights.extend(lights::read_light_record(c)?);
@@ -227,6 +243,12 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 Ok(())
             }),
             _ => {}
+        }
+    }
+    if let Some(xml) = rdk {
+        match render::read_document(&xml, &mut r.file.render) {
+            Ok(contents) => r.file.render_content = contents,
+            Err(_) => *r.file.damaged.entry("render content").or_default() += 1,
         }
     }
     finish(&mut r);
@@ -336,6 +358,12 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
                 if let Ok(views) = read_views(chunk.body) {
                     file.named_views = views;
                 }
+            }
+            render::TCODE_SETTINGS_RENDER => {
+                if render::read_render_settings(chunk.body.clone(), &mut file.render).is_err() {
+                    *file.damaged.entry("render settings").or_default() += 1;
+                }
+                settings::read_chunk(&chunk, &mut file.settings);
             }
             _ => settings::read_chunk(&chunk, &mut file.settings),
         }
@@ -608,7 +636,7 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
         let (mut attributes, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
         let bits = attributes.u32()?;
         if bits & 1 != 0 {
-            attributes.uuid()?;
+            m.id = attributes.uuid()?;
         }
         if bits & 2 != 0 {
             attributes.uuid()?;
@@ -619,13 +647,17 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
         if bits & 8 != 0 {
             m.name = attributes.wstring()?;
         }
-        b.uuid()?; // plug-in
+        m.plug_in = b.uuid()?;
         read_material_colors(&mut b, &mut m)?;
         // Rhino reads these colours without their alpha
         for color in [&mut m.ambient, &mut m.diffuse, &mut m.emission, &mut m.specular, &mut m.reflection, &mut m.transparent] {
             color[3] = 0;
         }
         m.textures = read_textures(&mut b)?;
+        // material channels, shareable, lighting, Fresnel and glossiness, then the render material
+        let channels = b.count(20)?;
+        b.take(20 * channels + 3 + 3 * 8)?;
+        m.render_material = b.uuid()?;
         return Ok(m);
     }
     let (major, minor) = c.version()?;
@@ -664,19 +696,34 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
         }
         2 => {
             // Rhino 4 and 5
-            let (mut b, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
-            b.uuid()?;
+            let (mut b, _, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+            m.id = b.uuid()?;
             m.index = b.i32()?;
             m.name = b.wstring()?;
-            b.uuid()?;
+            m.plug_in = b.uuid()?;
             read_material_colors(&mut b, &mut m)?;
             // before December 2009 the default transparent colour was grey: Rhino takes the diffuse
             if c.v.opennurbs < 200_912_010 && m.transparent[..3] == [128, 128, 128] {
                 m.transparent = m.diffuse;
             }
             m.textures = read_textures(&mut b)?;
+            // Flamingo library (1.1), material channels (1.2), shareable and lighting (1.3),
+            // Fresnel and glossiness (1.4), then the render material (1.5)
+            if minor >= 5 {
+                let mut rest = || -> R<Uuid> {
+                    b.wstring()?;
+                    let channels = b.count(20)?;
+                    b.take(20 * channels + 3 + 3 * 8)?;
+                    b.uuid()
+                };
+                m.render_material = rest().unwrap_or_default();
+            }
         }
         _ => return err("a material of an unknown version"),
+    }
+    // files before Rhino 6 keep the render material in RDK user data
+    if m.render_material.is_nil() {
+        m.render_material = render::obsolete_material_instance(&object.userdata).unwrap_or_default();
     }
     Ok(m)
 }
@@ -889,13 +936,16 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
     let object = c.object()?;
     let mut attributes = Attributes::default();
     let mut user = Vec::new();
+    let (mut decals, mut modifiers) = (Vec::new(), threedm_model::MeshModifiers::default());
     while c.left() > 0 {
         let chunk = c.chunk()?;
         match chunk.typecode {
             TCODE_OBJECT_RECORD_ATTRIBUTES => attributes = read_attributes(chunk.body)?,
             TCODE_OBJECT_RECORD_ATTRIBUTES_USERDATA => {
                 let mut body = chunk.body;
-                user.extend(user_strings_of(&user_data(&mut body)));
+                let userdata = user_data(&mut body);
+                user.extend(user_strings_of(&userdata));
+                render::object_render(&userdata, &mut decals, &mut modifiers);
             }
             TCODE_OBJECT_RECORD_END => break,
             _ => {}
@@ -909,6 +959,7 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
             // a hatch's background fill and boundary are in its attributes
             let hatch = (object.class == drafting::ON_HATCH && (attributes.hatch_background.is_some() || attributes.hatch_boundary)).then(|| object.data.clone());
             user.extend(user_strings_of(&object.userdata));
+            render::object_render(&object.userdata, &mut decals, &mut modifiers);
             if object.class == ON_TEXT_DOT {
                 // its text, shown with its point
                 user.extend(text_dot_text(object.data.clone()).unwrap_or_default());
@@ -929,6 +980,7 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
         }
         None => Geometry::Skipped("empty objects"),
     };
+    (attributes.decals, attributes.mesh_modifiers) = (decals, modifiers);
     Ok(RhinoObject { geometry, attributes, user, stroke: None, font })
 }
 

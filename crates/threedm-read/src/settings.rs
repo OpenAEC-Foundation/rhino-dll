@@ -29,6 +29,7 @@ pub(super) const TCODE_HISTORYRECORD_TABLE: u32 = 0x1000_0026;
 pub(super) const TCODE_HISTORYRECORD_RECORD: u32 = 0x2000_807B;
 pub(super) const ON_HISTORY_RECORD: Uuid = Uuid::parse("ECD0FD2F-2088-49dc-9641-9CF7A28FFA6B");
 
+#[allow(dead_code)]
 pub(super) const TCODE_USER_TABLE: u32 = 0x1000_0017;
 const TCODE_USER_TABLE_UUID: u32 = 0x2000_8080;
 const TCODE_USER_TABLE_RECORD_HEADER: u32 = 0x2000_8082;
@@ -310,8 +311,8 @@ fn read_grid_defaults(mut c: Cur<'_>) -> R<GridDefaults> {
 
 /// `ON_3dmRenderSettings::Read`: in a chunk from Rhino 6 (files from November 2013 on), in
 /// Rhino 5's layout (`ReadV5`, a version from 100) before.
-fn read_render_settings(mut c: Cur<'_>) -> R<RenderSettings> {
-    let mut r = RenderSettings::default();
+fn read_render_settings(mut c: Cur<'_>) -> R<DocumentRenderSettings> {
+    let mut r = DocumentRenderSettings::default();
     // Rhino 6 files before November 2013 have the old layout too: it starts with its version
     if c.v.archive <= 50 || c.peek_typecode() != Some(TCODE_ANONYMOUS_CHUNK) {
         let version = c.i32()?;
