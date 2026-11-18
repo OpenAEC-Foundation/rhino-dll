@@ -7,6 +7,9 @@ use glam::{DMat4, DVec3};
 use std::collections::BTreeMap;
 pub use threedm_core::{Uuid, Versions};
 
+mod render;
+pub use render::*;
+
 /// A layer (`ON_Layer`); its full path follows the parents by id.
 #[derive(Debug, Clone)]
 pub struct Layer {
@@ -28,6 +31,11 @@ pub struct Layer {
 pub struct Material {
     pub index: i32,
     pub name: String,
+    pub id: Uuid,
+    /// The plug-in it belongs to (the RDK's for materials made by render content).
+    pub plug_in: Uuid,
+    /// The render content it simulates ([`RenderContent::id`]), nil if none.
+    pub render_material: Uuid,
     pub ambient: [u8; 4],
     pub diffuse: [u8; 4],
     pub emission: [u8; 4],
@@ -159,6 +167,10 @@ pub struct Attributes {
     /// A hatch's background fill colour, and whether its boundary is drawn (Rhino 8).
     pub hatch_background: Option<[u8; 4]>,
     pub hatch_boundary: bool,
+    /// Its decals.
+    pub decals: Vec<Decal>,
+    /// Its mesh modifiers (only read: its meshes are as stored).
+    pub mesh_modifiers: MeshModifiers,
 }
 
 impl Default for Attributes {
@@ -188,6 +200,8 @@ impl Default for Attributes {
             display_order: 0,
             hatch_background: None,
             hatch_boundary: false,
+            decals: Vec::new(),
+            mesh_modifiers: MeshModifiers::default(),
         }
     }
 }
@@ -389,6 +403,11 @@ pub struct File<'a> {
     pub groups: Vec<(i32, String)>,
     /// The lights of the light table (and of the object table, where old files keep them).
     pub lights: Vec<Light>,
+    /// The render settings, with the rendering parts of the RDK document.
+    pub render: RenderSettings,
+    /// The render content of the RDK document: materials, environments and textures, each
+    /// followed by the content in its child slots.
+    pub render_content: Vec<RenderContent>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

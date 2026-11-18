@@ -20,6 +20,13 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
   and text). Clipping planes come with their rectangle, plane, depth, the objects they clip
   (selective clipping) and the viewports they clip, and the file's views with them.
+- Rendering: the render settings (image size, ambient and background colours, background style
+  and wallpaper, the environments of the background, reflections and skylight) with the parts of
+  the RDK document (ground plane, sun by hand or by date, time and place, skylight, linear
+  workflow, dithering, safe frame, post effects, render channels); every render material,
+  environment and texture with its parameters, and which material, layer and object uses which;
+  the decals and mesh modifiers (displacement, edge softening, thickening, curve piping, shut
+  lining) of objects. The meshes are not changed by them.
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
   layers) is up to the program that uses it; Open BIM Suite's Rhino loader is an example.
@@ -67,7 +74,7 @@ threedm_free(info);
 threedm_close(doc);
 ```
 
-Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`) and
+Requests: `info`, `layers`, `materials`, `blocks`, `lights`, `render_content`, `objects` (with `limit` and `offset`) and
 `object` (by `id`, with its geometry); see `crates/threedm-ffi/src/lib.rs`.
 
 From the command line:
