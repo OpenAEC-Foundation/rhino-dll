@@ -16,13 +16,14 @@
 //! Meshes are read up to [`MAX_VERTICES`] vertices, so that a damaged or hostile file cannot
 //! exhaust memory. Clipping planes are read with their rectangle, plane and the viewports they
 //! clip, and the viewports of the file's views with them; lights with their kind, place, colour
-//! and attenuation ([`Light`]). Layout details and objects the reader does not know are left out
-//! with the reason.
+//! and attenuation ([`Light`]). Layouts are among the views, with their paper ([`Page`]); their
+//! details are read with their boundary, the model view they show and its scale. Objects the
+//! reader does not know are left out with the reason.
 
 use glam::DVec3;
 use lights::{MAX_LIGHTS, TCODE_LIGHT_RECORD, TCODE_LIGHT_TABLE};
 use threedm_core::*;
-pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, Material, Mesh, Object as RhinoObject, Pbr, Texture, View};
+pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, Material, Mesh, Object as RhinoObject, Page, Pbr, Texture, View};
 
 mod dimensions;
 mod document;
@@ -232,6 +233,7 @@ const TCODE_SETTINGS_NAMED_VIEW_LIST: u32 = 0x2000_8036;
 const TCODE_VIEW_RECORD: u32 = 0x2000_803B;
 const TCODE_VIEW_VIEWPORT: u32 = 0x2000_823B;
 const TCODE_VIEW_NAME: u32 = 0x2000_8A3B;
+const TCODE_VIEW_ATTRIBUTES: u32 = 0x2000_8C3B;
 /// At most this many views are read.
 const MAX_VIEWS: usize = 1000;
 
@@ -268,8 +270,7 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
 }
 
 /// `TCODE_SETTINGS_VIEW_LIST` (and the named view list): a count and as many `ON_3dmView`
-/// records; of each its name and, from its `ON_Viewport`, the viewport's id, projection and
-/// camera.
+/// records.
 fn read_views(mut c: Cur<'_>) -> R<Vec<View>> {
     let count = c.i32()?;
     if !(0..=MAX_VIEWS as i32).contains(&count) {
@@ -281,22 +282,60 @@ fn read_views(mut c: Cur<'_>) -> R<Vec<View>> {
         if record.typecode != TCODE_VIEW_RECORD {
             return err("a view record of an unknown kind");
         }
-        let mut body = record.body;
-        let (mut name, mut viewport) = (String::new(), None);
-        while let Ok(chunk) = body.chunk() {
-            match chunk.typecode {
-                TCODE_ENDOFTABLE => break,
-                TCODE_VIEW_NAME => name = chunk.body.clone().wstring().unwrap_or_default(),
-                TCODE_VIEW_VIEWPORT => viewport = read_viewport(chunk.body).ok(),
-                _ => {}
-            }
-        }
-        if let Some(mut view) = viewport {
-            view.name = name;
-            views.push(view);
-        }
+        views.extend(read_view(record.body)?.map(|(view, _)| view));
     }
     Ok(views)
+}
+
+/// `ON_3dmView::Read`: chunks up to `TCODE_ENDOFTABLE`; of them its name, from its `ON_Viewport`
+/// the viewport's id, projection and camera, and from its attributes whether it is a layout
+/// and its paper, and whether its projection is locked. `None` without a viewport.
+fn read_view(mut c: Cur<'_>) -> R<Option<(View, bool)>> {
+    let (mut name, mut viewport, mut page, mut locked) = (String::new(), None, None, false);
+    while let Ok(chunk) = c.chunk() {
+        match chunk.typecode {
+            TCODE_ENDOFTABLE => break,
+            TCODE_VIEW_NAME => name = chunk.body.clone().wstring().unwrap_or_default(),
+            TCODE_VIEW_VIEWPORT => viewport = read_viewport(chunk.body).ok(),
+            TCODE_VIEW_ATTRIBUTES => {
+                if let Ok((p, l)) = read_view_attributes(chunk.body) {
+                    (page, locked) = (p, l);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(viewport.map(|mut view: View| {
+        view.name = name;
+        view.page = page;
+        (view, locked)
+    }))
+}
+
+/// `TCODE_VIEW_ATTRIBUTES` (1.1 and later, from openNURBS 2005-03-17): the view type (1 a
+/// page), the paper's width and height (mm), an obsolete parent id and box; from 1.2 the
+/// display mode and `ON_3dmPageSettings` (its page number, then the paper again); from 1.3
+/// whether the projection is locked.
+fn read_view_attributes(mut c: Cur<'_>) -> R<(Option<Page>, bool)> {
+    let (major, minor) = c.version()?;
+    if major != 1 || minor < 1 || c.v.archive < 4 || c.v.opennurbs < 200_503_170 {
+        return Ok((None, false));
+    }
+    let view_type = c.i32()?;
+    let mut page = Page { width: c.f64()?, height: c.f64()?, number: 0 };
+    c.take(16 + 48)?; // obsolete parent viewport id and nested view position
+    let mut locked = false;
+    if minor >= 2 {
+        c.uuid()?; // display mode
+        let (mut settings, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+        if major == 1 {
+            page = Page { number: settings.i32()?, width: settings.f64()?, height: settings.f64()? };
+        }
+        if minor >= 3 {
+            locked = c.bool()?;
+        }
+    }
+    Ok(((view_type == 1).then_some(page), locked))
 }
 
 /// `ON_Viewport::Read` up to its id: the projection (2 is perspective), the camera (location,
@@ -318,7 +357,7 @@ fn read_viewport(mut c: Cur<'_>) -> R<View> {
     let (bottom, top, near) = (f[2], f[3], f[4]);
     let perspective = projection == 2;
     let fov_y = if perspective && near > 0.0 { 2.0 * (0.5 * (top - bottom) / near).atan() } else { 0.0 };
-    Ok(View { id, name: String::new(), perspective, location, direction: direction.normalize_or_zero(), up: up.normalize_or_zero(), fov_y, height: top - bottom })
+    Ok(View { id, name: String::new(), perspective, location, direction: direction.normalize_or_zero(), up: up.normalize_or_zero(), fov_y, height: top - bottom, page: None })
 }
 
 /// `ON_3dmUnitsAndTolerances`: the length unit, as metres per unit and its name.
@@ -870,8 +909,19 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
                 if minor >= 5 {
                     a.linetype = c.i32()?;
                 }
-                if minor >= 6 && c.u8()? == 1 {
-                    a.space = 2;
+                if minor >= 6 {
+                    if c.u8()? == 1 {
+                        a.space = 2;
+                    }
+                    // display material references again (viewport, material): the page an
+                    // object is on is kept as one with an obsolete material id
+                    let n = c.count(32)?;
+                    for _ in 0..n {
+                        let (viewport, material) = (c.uuid()?, c.uuid()?);
+                        if material == ON_OBSOLETE_PAGE_SPACE_OBJECT {
+                            a.viewport = viewport;
+                        }
+                    }
                 }
                 Ok(())
             };
@@ -880,6 +930,10 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
     }
     Ok(a)
 }
+
+/// `ON_ObsoletePageSpaceObjectId`: the display material of the reference that puts an object
+/// on a layout, in attributes before the item list.
+const ON_OBSOLETE_PAGE_SPACE_OBJECT: Uuid = Uuid::parse("9BBB37E9-2131-4fb8-B9C6-5524859B98B8");
 
 fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize, d: &Drafting) -> R<Geometry<'a>> {
     let mut c = object.data;
@@ -1038,6 +1092,12 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
             Err(_) => Geometry::Skipped("clipping planes that could not be read"),
         });
     }
+    if class == ON_DETAIL_VIEW {
+        return Ok(match read_detail(&mut c) {
+            Ok(detail) => detail,
+            Err(_) => Geometry::Skipped("details that could not be read"),
+        });
+    }
     Ok(Geometry::Skipped(match object_type {
         1 | 2 => "points",
         4 => "curves",
@@ -1051,6 +1111,25 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         0x40000 => "SubD objects (no mesh in the file)",
         _ => "other objects",
     }))
+}
+
+const ON_DETAIL_VIEW: Uuid = Uuid::parse("C8C66EFA-B3CB-4e00-9440-2AD66203379E");
+
+/// `ON_DetailView::Read`: in a chunk, its `ON_3dmView` (the model view it shows) and its
+/// boundary (an `ON_NurbsCurve` on the page), each in a chunk of its own, then (1.1) the page
+/// to model ratio. Whether the detail is locked is its view's locked projection.
+fn read_detail<'a>(c: &mut Cur<'_>) -> R<Geometry<'a>> {
+    let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    if major != 1 {
+        return err("a detail of an unknown version");
+    }
+    let (view, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let (view, locked) = read_view(view)?.ok_or("a detail without a viewport")?;
+    let (mut curve, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    let boundary = tessellate::curve_object(tessellate::ON_NURBS_CURVE[0], &mut curve).ok_or("a detail without a boundary")?;
+    // a perspective detail has no scale (Rhino gives 0), whatever is stored
+    let scale = if minor >= 1 { Some(b.f64()?).filter(|s| s.is_finite() && *s > 0.0 && !view.perspective) } else { None };
+    Ok(Geometry::Detail { boundary, view, scale, locked })
 }
 
 const ON_CLIPPING_PLANE_SURFACE: Uuid = Uuid::parse("DBC5A584-CE3F-4170-98A8-497069CA5C36");

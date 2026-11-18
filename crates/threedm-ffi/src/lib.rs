@@ -11,8 +11,9 @@
 //! `threedm_query` takes a JSON request and returns a JSON answer, `{"ok": true, "result": …}` or
 //! `{"ok": false, "error": "…"}`; the caller frees it with `threedm_free`. Requests:
 //! - `{"query": "info"}`: the Rhino version, the application that saved the file, its units,
-//!   the number of layers, materials, bitmaps, blocks, lights and objects, the objects by kind,
-//!   and the records that could not be read;
+//!   the number of layers, materials, bitmaps, blocks, lights and objects, the views (layouts
+//!   with their `page`: paper in mm and page number) and the layouts alone, the objects by
+//!   kind, and the records that could not be read;
 //! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "bitmaps"}`,
 //!   `{"query": "blocks"}`, `{"query": "lights"}`: the tables (materials with their colours,
 //!   textures and physically based parameters, embedded bitmaps by name, file and byte count);
@@ -20,7 +21,10 @@
 //!   attributes and user text, `{"total", "objects"}`;
 //! - `{"query": "object", "id": "…"}`: one object by its id, with its geometry: meshes
 //!   (`positions`, triangle `indices`, optional `normals`, `texture_coordinates` and `colors`),
-//!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance.
+//!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance,
+//!   or of a layout's detail its `boundary` on the page, the model `view` it shows, its `scale`
+//!   (page per model length) and whether it is `locked`; objects on a layout have `space` 2 and
+//!   the layout's id as `viewport`.
 
 use std::ffi::{c_char, CStr, CString};
 
@@ -46,6 +50,7 @@ fn kind(o: &RhinoObject<'_>) -> String {
         Geometry::Points { kind, .. } => kind.to_string(),
         Geometry::Instance { .. } => "Block instance".into(),
         Geometry::ClippingPlane(_) => "Clipping plane".into(),
+        Geometry::Detail { .. } => "Detail".into(),
         Geometry::Skipped(why) => format!("left out: {why}"),
     }
 }
@@ -139,6 +144,12 @@ fn geometry_json(g: &Geometry<'_>) -> Value {
             "depth": p.depth,
             "selection": p.selection.as_ref().map(|s| json!({"objects": s.objects.iter().map(|o| o.to_string()).collect::<Vec<_>>(), "layers": s.layers, "except": s.except})),
         }),
+        Geometry::Detail { boundary, view, scale, locked } => json!({
+            "boundary": boundary.iter().map(|p| p.to_array()).collect::<Vec<_>>(),
+            "view": view_json(view),
+            "scale": scale,
+            "locked": locked,
+        }),
         Geometry::Skipped(why) => json!({"left_out": why}),
     }
 }
@@ -201,6 +212,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "objects": file.objects.len(),
                 "views": file.views.iter().map(view_json).collect::<Vec<_>>(),
                 "named_views": file.named_views.iter().map(view_json).collect::<Vec<_>>(),
+                "layouts": file.views.iter().filter(|v| v.page.is_some()).map(view_json).collect::<Vec<_>>(),
                 "groups": file.groups.iter().map(|(i, n)| json!({"index": i, "name": n})).collect::<Vec<_>>(),
                 "kinds": kinds,
                 "damaged": file.damaged,
@@ -332,5 +344,6 @@ mod tests {
 }
 
 fn view_json(v: &threedm_read::View) -> serde_json::Value {
-    json!({"id": v.id.to_string(), "name": v.name, "perspective": v.perspective, "location": v.location.to_array(), "direction": v.direction.to_array(), "up": v.up.to_array(), "fov_y": v.fov_y, "height": v.height})
+    let page = v.page.map(|p| json!({"width_mm": p.width, "height_mm": p.height, "number": p.number}));
+    json!({"id": v.id.to_string(), "name": v.name, "perspective": v.perspective, "location": v.location.to_array(), "direction": v.direction.to_array(), "up": v.up.to_array(), "fov_y": v.fov_y, "height": v.height, "page": page})
 }

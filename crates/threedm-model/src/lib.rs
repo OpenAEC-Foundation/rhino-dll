@@ -225,6 +225,19 @@ pub enum Geometry<'a> {
     Drawing { lines: Vec<Vec<DVec3>>, meshes: Vec<Mesh>, kind: &'static str },
     /// A clipping plane: the rectangle Rhino draws for it and the plane it cuts with.
     ClippingPlane(ClippingPlane),
+    /// A detail of a layout (`ON_DetailView`): a window on the page that shows the model.
+    Detail {
+        /// Its outline on the page (page units), as stored: a closed polyline, the first
+        /// corner repeated at the end.
+        boundary: Vec<DVec3>,
+        /// The model view it shows: its camera and projection.
+        view: View,
+        /// Page length per model length (`m_page_per_model_ratio`), when set: a detail at
+        /// 1:100 with page and model in millimetres has 0.01. `None` for a perspective.
+        scale: Option<f64>,
+        /// Its projection is locked (Rhino's Lock detail).
+        locked: bool,
+    },
     /// Not drawn: why, for the count in the project information.
     Skipped(&'static str),
 }
@@ -257,7 +270,8 @@ pub struct ClipSelection {
     pub except: bool,
 }
 
-/// A viewport of the file's views (`ON_3dmView`); the first is the view that was active.
+/// A viewport of the file's views (`ON_3dmView`); the first is the view that was active. The
+/// views of layouts are among them, with their [`Page`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
     pub id: Uuid,
@@ -271,6 +285,18 @@ pub struct View {
     /// units) of a parallel one.
     pub fov_y: f64,
     pub height: f64,
+    /// A layout (page view, `ON::page_view_type`): its paper; `None` for a model view.
+    pub page: Option<Page>,
+}
+
+/// The paper of a layout (`ON_3dmPageSettings`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Page {
+    /// Width and height in millimetres.
+    pub width: f64,
+    pub height: f64,
+    /// Its place among the layouts, from 0.
+    pub number: i32,
 }
 
 /// What kind of light a [`Light`] is (`ON::light_style`).

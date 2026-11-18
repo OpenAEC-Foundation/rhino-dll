@@ -567,3 +567,79 @@ fn materials_are_read_as_in_rhino() {
     }
     assert_eq!(file.bitmaps.len(), reference["bitmaps"].as_array().unwrap().len());
 }
+
+/// Layouts (`layouts.3dm`, from make_layouts.py) as Rhino 9 reads them (`layouts.json`): the
+/// pages among the views with their paper and page number; of each detail its rectangle on the
+/// page, projection, camera, scale and lock; and the page each page object is on.
+#[test]
+fn layouts_and_details_are_read_as_in_rhino() {
+    let data = load("layouts.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("layouts.json")).unwrap()).unwrap();
+    let point = |q: &serde_json::Value| DVec3::new(q[0].as_f64().unwrap(), q[1].as_f64().unwrap(), q[2].as_f64().unwrap());
+    let ids: Vec<_> = file.views.iter().map(|v| (v.name.clone(), v.id.to_string())).collect();
+    let rhino: Vec<_> = reference["views"].as_array().unwrap().iter().map(|v| (v["name"].as_str().unwrap().to_string(), v["id"].as_str().unwrap().to_string())).collect();
+    assert_eq!(ids, rhino);
+    let pages: Vec<_> = file.views.iter().filter_map(|v| v.page.map(|p| (v.name.clone(), v.id.to_string(), p.width, p.height, p.number as i64))).collect();
+    let rhino: Vec<_> = reference["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["name"].as_str().unwrap().to_string(), p["id"].as_str().unwrap().to_string(), p["width"].as_f64().unwrap(), p["height"].as_f64().unwrap(), p["number"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(pages, rhino);
+    for r in reference["details"].as_array().unwrap() {
+        let name = r["name"].as_str().unwrap();
+        let o = file.objects.iter().find(|o| o.attributes.name == name).unwrap_or_else(|| panic!("{name}"));
+        let Geometry::Detail { boundary, view, scale, locked } = &o.geometry else { panic!("{name}: not a detail") };
+        let (lo, hi) = boundary.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        let corners = r["corners"].as_array().unwrap();
+        assert!(lo.distance(point(&corners[0])) < 1e-9 && hi.distance(point(&corners[1])) < 1e-9, "{name}: {lo} {hi}");
+        assert_eq!(boundary.len(), 5, "{name}");
+        assert_eq!((o.attributes.space, o.attributes.viewport.to_string()), (2, r["page"].as_str().unwrap().to_string()), "{name}");
+        assert_eq!(view.id.to_string(), r["viewport"].as_str().unwrap(), "{name}");
+        assert_eq!((view.perspective, *locked), (r["perspective"].as_bool().unwrap(), r["locked"].as_bool().unwrap()), "{name}");
+        assert!(view.page.is_none(), "{name}");
+        assert!(view.location.distance(point(&r["location"])) < 1e-6, "{name}");
+        assert!(view.direction.distance(point(&r["direction"]).normalize()) < 1e-9, "{name}");
+        assert!(view.up.distance(point(&r["up"]).normalize()) < 1e-9, "{name}");
+        let f: Vec<f64> = r["frustum"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        if view.perspective {
+            // Rhino fits the live viewport's frustum to the detail on screen: the field of view
+            // stored differs by a fraction of a percent
+            assert!((view.fov_y - 2.0 * (0.5 * (f[3] - f[2]) / f[4]).atan()).abs() < 2e-3, "{name}: {}", view.fov_y);
+        } else {
+            assert!((view.height - (f[3] - f[2])).abs() < 1e-9, "{name}");
+        }
+        let rhino_scale = r["scale"].as_f64().unwrap();
+        assert_eq!(*scale, (rhino_scale > 0.0).then_some(rhino_scale), "{name}");
+    }
+    for r in reference["page_objects"].as_array().unwrap() {
+        let name = r["name"].as_str().unwrap();
+        let a = &file.objects.iter().find(|o| o.attributes.name == name).unwrap_or_else(|| panic!("{name}")).attributes;
+        assert_eq!((a.space, a.viewport.to_string()), (2, r["page"].as_str().unwrap().to_string()), "{name}");
+    }
+    assert_eq!(file.objects.iter().filter(|o| o.attributes.space == 2).count(), reference["page_objects"].as_array().unwrap().len());
+}
+
+/// The detail of McNeel's `V5/v5_example_file.3dm` (set `OPENNURBS_EXAMPLES` to the
+/// `example_files` folder of an openNURBS checkout) as Rhino 9 reads it: its letter page, the
+/// Top detail on it with its rectangle and scale, and the four leaders on the page (Rhino 5
+/// attributes).
+#[test]
+fn the_detail_of_the_opennurbs_v5_example_is_read() {
+    let Ok(folder) = std::env::var("OPENNURBS_EXAMPLES") else { return };
+    let data = std::fs::read(std::path::Path::new(&folder).join("V5/v5_example_file.3dm")).unwrap();
+    let file = read(&data).unwrap();
+    let page = "c00c0f9e-8dcf-4bdb-83d9-09ec1eb413dd";
+    let pages: Vec<_> = file.views.iter().filter_map(|v| v.page.map(|p| (v.name.as_str(), v.id.to_string(), p.width, p.height, p.number))).collect();
+    assert_eq!(pages, [("Page 1", page.to_string(), 215.9, 279.4, 0)]);
+    let on_page: Vec<_> = file.objects.iter().filter(|o| o.attributes.space == 2).collect();
+    assert_eq!(on_page.len(), 5);
+    assert!(on_page.iter().all(|o| o.attributes.viewport.to_string() == page));
+    let detail = file.objects.iter().find(|o| o.attributes.id.to_string() == "09154fd0-8eae-416c-a2d8-17c339b6035e").unwrap();
+    let Geometry::Detail { boundary, view, scale, locked } = &detail.geometry else { panic!("not a detail") };
+    let (lo, hi) = boundary.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    assert!(lo.distance(DVec3::new(10.0, 10.0, 0.0)) < 1e-9 && hi.distance(DVec3::new(205.9, 269.4, 0.0)) < 1e-9, "{lo} {hi}");
+    assert_eq!((view.name.as_str(), view.perspective, *locked, *scale), ("Top", false, false, Some(1.2249496764269077)));
+}

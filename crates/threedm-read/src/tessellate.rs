@@ -26,7 +26,7 @@ const ON_LINE_CURVE: Uuid = Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0");
 const ON_ARC_CURVE: Uuid = Uuid::parse("CF33BE2A-09B4-11d4-BFFB-0010830122F0");
 const ON_POLYLINE_CURVE: Uuid = Uuid::parse("4ED7D4E6-E947-11d3-BFE5-0010830122F0");
 /// `ON_NurbsCurve` and the ids older files write it with (`TL_NurbsCurve`, ..).
-const ON_NURBS_CURVE: [Uuid; 3] = [
+pub(super) const ON_NURBS_CURVE: [Uuid; 3] = [
     Uuid::parse("4ED7D4DD-E947-11d3-BFE5-0010830122F0"),
     Uuid::parse("5EAF1119-0B51-11d4-BFFE-0010830122F0"),
     Uuid::parse("76A709D5-1550-11d4-8000-0010830122F0"),

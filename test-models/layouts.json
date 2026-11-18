@@ -1,0 +1,160 @@
+{
+ "details": [
+  {
+   "locked": true, 
+   "corners": [
+    [
+     20.0, 
+     20.0, 
+     0.0
+    ], 
+    [
+     220.0, 
+     200.0, 
+     0.0
+    ]
+   ], 
+   "frustum": [
+    -10000.0, 
+    10000.0, 
+    -9000.0, 
+    9000.0, 
+    377.9296875, 
+    3401.3671875
+   ], 
+   "location": [
+    5000.0, 
+    3000.0, 
+    3389.6484375
+   ], 
+   "up": [
+    0.0, 
+    1.0, 
+    0.0
+   ], 
+   "name": "Top detail", 
+   "page": "c7f2423c-34b7-4934-b8f7-572ecd01b793", 
+   "scale": 0.01, 
+   "viewport": "2b1b61c7-e451-4db9-8ffb-011bb01f993b", 
+   "direction": [
+    -0.0, 
+    -0.0, 
+    -1.0
+   ], 
+   "perspective": false
+  }, 
+  {
+   "locked": false, 
+   "corners": [
+    [
+     15.0, 
+     100.0, 
+     0.0
+    ], 
+    [
+     195.0, 
+     280.0, 
+     0.0
+    ]
+   ], 
+   "frustum": [
+    -6121.6333698683038, 
+    6121.6333698683038, 
+    -6131.1095825151579, 
+    6131.1095825151579, 
+    25506.805707784602, 
+    35917.636844042121
+   ], 
+   "location": [
+    -15000.0, 
+    -20000.0, 
+    12000.0
+   ], 
+   "up": [
+    0.0, 
+    0.0, 
+    1.0
+   ], 
+   "name": "Perspective detail", 
+   "page": "a952089f-4dad-42c6-8149-c2341aa616cf", 
+   "scale": 0.0, 
+   "viewport": "9a6740f2-8239-4414-8517-137ee8cd1767", 
+   "direction": [
+    20000.0, 
+    23000.0, 
+    -10500.0
+   ], 
+   "perspective": true
+  }
+ ], 
+ "pages": [
+  {
+   "number": 0, 
+   "width": 420.0, 
+   "height": 297.0, 
+   "id": "c7f2423c-34b7-4934-b8f7-572ecd01b793", 
+   "name": "Plan"
+  }, 
+  {
+   "number": 1, 
+   "width": 210.0, 
+   "height": 297.0, 
+   "id": "a952089f-4dad-42c6-8149-c2341aa616cf", 
+   "name": "View"
+  }
+ ], 
+ "views": [
+  {
+   "id": "37e7797b-f30d-776e-92cd-8c1a1cc3dc8d", 
+   "name": "Perspective"
+  }, 
+  {
+   "id": "57a340a2-4b61-c80a-5c99-90fd4c0dd0ab", 
+   "name": "Top"
+  }, 
+  {
+   "id": "1bb8f135-bb15-e5c6-b90b-4e6b2ce766d3", 
+   "name": "Front"
+  }, 
+  {
+   "id": "5a3792dc-56a4-48e0-c9b6-e338cfbb30ba", 
+   "name": "Right"
+  }, 
+  {
+   "id": "c7f2423c-34b7-4934-b8f7-572ecd01b793", 
+   "name": "Plan"
+  }, 
+  {
+   "id": "a952089f-4dad-42c6-8149-c2341aa616cf", 
+   "name": "View"
+  }
+ ], 
+ "page_objects": [
+  {
+   "page": "c7f2423c-34b7-4934-b8f7-572ecd01b793", 
+   "kind": "DetailView", 
+   "perspective": false, 
+   "locked": true, 
+   "name": "Top detail", 
+   "scale": 0.01
+  }, 
+  {
+   "page": "a952089f-4dad-42c6-8149-c2341aa616cf", 
+   "kind": "DetailView", 
+   "perspective": true, 
+   "locked": false, 
+   "name": "Perspective detail", 
+   "scale": 0.0
+  }, 
+  {
+   "page": "c7f2423c-34b7-4934-b8f7-572ecd01b793", 
+   "kind": "TextEntity", 
+   "name": "Page text"
+  }, 
+  {
+   "page": "c7f2423c-34b7-4934-b8f7-572ecd01b793", 
+   "kind": "LineCurve", 
+   "name": "Page line"
+  }
+ ]
+}
