@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub use threedm_core::{Uuid, Versions};
 
 /// A layer (`ON_Layer`); its full path follows the parents by id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Layer {
     /// The index objects refer to.
     pub index: i32,
@@ -20,6 +20,147 @@ pub struct Layer {
     pub material: i32,
     /// The index of its linetype (`-1` continuous).
     pub linetype: i32,
+    /// Print colour (unset in the file: its colour) and width (millimetres; 0 the default,
+    /// negative no print).
+    pub plot_color: [u8; 4],
+    pub plot_weight: f64,
+    /// The section style of the section style table its objects are cut with (Rhino 9), by
+    /// index; `-1` none.
+    pub section_style: i32,
+    /// Its own section style (Rhino 8), over the table's.
+    pub custom_section_style: Option<SectionStyle>,
+}
+
+/// How the ends of a wide line are drawn (`ON::LineCapStyle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineCap {
+    #[default]
+    Round,
+    Flat,
+    Square,
+}
+
+/// How the corners of a wide line are drawn (`ON::LineJoinStyle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineJoin {
+    #[default]
+    Round,
+    Miter,
+    Bevel,
+}
+
+/// A linetype (`ON_Linetype`) of the linetype table, or an object's own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Linetype {
+    /// The index objects and layers refer to.
+    pub index: i32,
+    pub id: Uuid,
+    pub name: String,
+    /// Dashes as positive lengths and gaps as negative ones.
+    pub segments: Vec<f64>,
+    /// Rhino 8: how wide its lines are drawn, in `width_unit` (`ON::LengthUnitSystem`: 0 none,
+    /// 2 millimetres, 3 centimetres, 4 metres, 8 inches, ..).
+    pub width: f64,
+    pub width_unit: u8,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    /// A tapered width: points (position along the curve from 0 to 1, width).
+    pub taper: Vec<[f64; 2]>,
+    /// Its pattern is in model distances also on layouts and in details.
+    pub always_model_distances: bool,
+}
+
+impl Default for Linetype {
+    fn default() -> Self {
+        Linetype { index: -1, id: Uuid::default(), name: String::new(), segments: Vec::new(), width: 1.0, width_unit: 0, cap: LineCap::Round, join: LineJoin::Round, taper: Vec::new(), always_model_distances: false }
+    }
+}
+
+/// How a curve's line is drawn wide: its linetype's width, ends, corners and taper, and its
+/// print width and colour (from the object or its layer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stroke {
+    /// The linetype it comes from by index; `-1` the object's own linetype or continuous.
+    pub linetype: i32,
+    /// The width as the linetype gives it, in `width_unit` (`ON::LengthUnitSystem`, 0 none).
+    pub width: f64,
+    pub width_unit: u8,
+    /// The width in model units, when `width_unit` is a length.
+    pub model_width: Option<f64>,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    /// Points (position along the curve from 0 to 1, width in `width_unit`).
+    pub taper: Vec<[f64; 2]>,
+    /// Print width in millimetres (0 the default, negative no print) and print colour.
+    pub print_width: f64,
+    pub print_color: [u8; 4],
+}
+
+/// A section style (`ON_SectionStyle`): how the cut of an object by a clipping plane is drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionStyle {
+    /// Its index in the section style table (Rhino 9); `-1` an object's or layer's own.
+    pub index: i32,
+    pub id: Uuid,
+    pub name: String,
+    /// 0 no background fill, 1 as the viewport draws the object, 2 a solid colour.
+    pub background_fill_mode: u8,
+    /// Colours as `ON_Color` (alpha 0 opaque); [`UNSET_COLOR`]: the object's own.
+    pub background_fill_color: [u8; 4],
+    pub background_fill_print_color: [u8; 4],
+    pub boundary_visible: bool,
+    pub boundary_color: [u8; 4],
+    pub boundary_print_color: [u8; 4],
+    /// The boundary's width as a multiple of the object's.
+    pub boundary_width_scale: f64,
+    /// 0 closed curves are filled, 1 only the cuts of solid objects.
+    pub fill_rule: u8,
+    /// The hatch pattern (index) the cut is hatched with, [`UNSET_INDEX`] none; its scale,
+    /// rotation (radians) and colours.
+    pub hatch_index: i32,
+    pub hatch_scale: f64,
+    pub hatch_rotation: f64,
+    pub hatch_color: [u8; 4],
+    pub hatch_print_color: [u8; 4],
+    /// The boundary's own linetype, when it has one.
+    pub boundary_linetype: Option<Linetype>,
+    /// Rhino 9: the boundary's linetype by index ([`UNSET_INDEX`] none), and the print widths
+    /// (millimetres, -10 unset) of boundary and hatch.
+    pub boundary_linetype_index: i32,
+    pub boundary_print_width: f64,
+    pub hatch_print_width: f64,
+}
+
+/// `ON_Color::UnsetColor`.
+pub const UNSET_COLOR: [u8; 4] = [255; 4];
+/// `ON_UNSET_INT_INDEX`.
+pub const UNSET_INDEX: i32 = i32::MIN + 1;
+
+impl Default for SectionStyle {
+    fn default() -> Self {
+        SectionStyle {
+            index: -1,
+            id: Uuid::default(),
+            name: String::new(),
+            background_fill_mode: 1,
+            background_fill_color: UNSET_COLOR,
+            background_fill_print_color: UNSET_COLOR,
+            boundary_visible: true,
+            boundary_color: UNSET_COLOR,
+            boundary_print_color: UNSET_COLOR,
+            boundary_width_scale: 3.0,
+            fill_rule: 0,
+            hatch_index: UNSET_INDEX,
+            hatch_scale: 1.0,
+            hatch_rotation: 0.0,
+            hatch_color: UNSET_COLOR,
+            hatch_print_color: UNSET_COLOR,
+            boundary_linetype: None,
+            boundary_linetype_index: UNSET_INDEX,
+            boundary_print_width: -10.0,
+            hatch_print_width: -10.0,
+        }
+    }
 }
 
 /// A material (`ON_Material`): its colours, shine, reflectivity, index of refraction and
@@ -159,6 +300,16 @@ pub struct Attributes {
     /// A hatch's background fill colour, and whether its boundary is drawn (Rhino 8).
     pub hatch_background: Option<[u8; 4]>,
     pub hatch_boundary: bool,
+    /// The object's own linetype (Rhino 8) in full: with its width, cap, join and taper.
+    pub custom_linetype_style: Option<Linetype>,
+    /// Where its section style comes from: 0 by layer, 1 by object, 2 by parent, 3 from the
+    /// clipping plane that cuts it.
+    pub section_source: u8,
+    /// Its section style of the table (Rhino 9) by index, `-1` none, and its own (Rhino 8).
+    pub section_style: i32,
+    pub custom_section_style: Option<SectionStyle>,
+    /// A clipping plane's label: 0 none, 1 a text dot of its name, 2 a text of its name.
+    pub clipping_label: u8,
 }
 
 impl Default for Attributes {
@@ -188,6 +339,11 @@ impl Default for Attributes {
             display_order: 0,
             hatch_background: None,
             hatch_boundary: false,
+            custom_linetype_style: None,
+            section_source: 0,
+            section_style: -1,
+            custom_section_style: None,
+            clipping_label: 0,
         }
     }
 }
@@ -361,6 +517,9 @@ pub struct Object<'a> {
     pub geometry: Geometry<'a>,
     pub attributes: Attributes,
     pub user: Vec<(String, String)>,
+    /// Of a curve: how its line is drawn wide (its linetype's width, cap and join, its print
+    /// width).
+    pub stroke: Option<Stroke>,
 }
 
 /// A Rhino file as read.
@@ -376,6 +535,10 @@ pub struct File<'a> {
     pub page_meters: f64,
     pub page_unit: &'static str,
     pub layers: Vec<Layer>,
+    /// The linetype table.
+    pub linetypes: Vec<Linetype>,
+    /// The section style table (Rhino 9).
+    pub section_styles: Vec<SectionStyle>,
     pub materials: Vec<Material>,
     /// The bitmap table: images embedded in the file.
     pub bitmaps: Vec<Bitmap>,

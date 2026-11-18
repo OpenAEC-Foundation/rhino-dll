@@ -1,0 +1,613 @@
+{
+ "linetypes": [
+  {
+   "width_units": 2, 
+   "join": 1, 
+   "id": "0fda8e3b-71d0-42fa-b3d5-cb1ba69b4630", 
+   "segments": [
+    5.0, 
+    -2.0
+   ], 
+   "cap": 1, 
+   "index": 0, 
+   "taper": [], 
+   "always_model": false, 
+   "name": "Wide mm", 
+   "width": 2.0
+  }, 
+  {
+   "width_units": 3, 
+   "join": 2, 
+   "id": "ccb1f6e5-655f-4fb6-9904-0ae2fe32fee2", 
+   "segments": [
+    1.0
+   ], 
+   "cap": 2, 
+   "index": 1, 
+   "taper": [], 
+   "always_model": false, 
+   "name": "Wide model", 
+   "width": 4.0
+  }, 
+  {
+   "width_units": 0, 
+   "join": 0, 
+   "id": "b5991eac-d4f8-4eb0-979c-6d78abcae864", 
+   "segments": [
+    1.0
+   ], 
+   "cap": 0, 
+   "index": 2, 
+   "taper": [
+    [
+     0.0, 
+     0.5
+    ], 
+    [
+     0.29999999999999999, 
+     3.0
+    ], 
+    [
+     1.0, 
+     1.5
+    ]
+   ], 
+   "always_model": true, 
+   "name": "Tapered", 
+   "width": 1.0
+  }
+ ], 
+ "section_styles": [
+  {
+   "BoundaryColor": [
+    40, 
+    40, 
+    40, 
+    0
+   ], 
+   "Id": "4f07829c-6174-43eb-8e14-e77bcd22bb24", 
+   "HatchRotationRadians": 0.78539816339744828, 
+   "BoundaryPrintColor": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "BoundaryLinetypeIndex": -2147483647, 
+   "Index": 0, 
+   "HatchPatternColor": [
+    90, 
+    90, 
+    90, 
+    0
+   ], 
+   "HatchPatternPrintColor": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "Name": "Concrete", 
+   "BoundaryVisible": true, 
+   "SectionFillRule": "SolidObjects", 
+   "HatchScale": 2.0, 
+   "BackgroundFillMode": "SolidColor", 
+   "BoundaryPlotWeightMillimeters": -10.0, 
+   "BackgroundFillColor": [
+    200, 
+    200, 
+    190, 
+    0
+   ], 
+   "HatchIndex": 0, 
+   "BoundaryWidthScale": 2.0, 
+   "HatchPatternPlotWeightMillimeters": -10.0, 
+   "BackgroundFillPrintColor": [
+    255, 
+    255, 
+    255, 
+    255
+   ]
+  }, 
+  {
+   "BoundaryColor": [
+    0, 
+    0, 
+    255, 
+    0
+   ], 
+   "Id": "a210a3ba-aec3-4dc6-abdb-862244b567b6", 
+   "HatchRotationRadians": 0.0, 
+   "BoundaryPrintColor": [
+    0, 
+    0, 
+    100, 
+    0
+   ], 
+   "BoundaryLinetypeIndex": 0, 
+   "Index": 1, 
+   "HatchPatternColor": [
+    0, 
+    128, 
+    0, 
+    0
+   ], 
+   "HatchPatternPrintColor": [
+    0, 
+    60, 
+    0, 
+    0
+   ], 
+   "Name": "Steel", 
+   "BoundaryVisible": false, 
+   "SectionFillRule": "ClosedCurves", 
+   "HatchScale": 0.5, 
+   "BackgroundFillMode": "None", 
+   "BoundaryPlotWeightMillimeters": 0.34999999999999998, 
+   "BackgroundFillColor": [
+    0, 
+    0, 
+    0, 
+    255
+   ], 
+   "HatchIndex": 1, 
+   "BoundaryWidthScale": 1.5, 
+   "HatchPatternPlotWeightMillimeters": 0.17999999999999999, 
+   "BackgroundFillPrintColor": [
+    250, 
+    250, 
+    250, 
+    0
+   ]
+  }
+ ], 
+ "layers": [
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": null, 
+   "name": "Default", 
+   "linetype": -1, 
+   "plot_color": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "index": 0
+  }, 
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": null, 
+   "name": "Layer 01", 
+   "linetype": -1, 
+   "plot_color": [
+    200, 
+    0, 
+    0, 
+    0
+   ], 
+   "index": 1
+  }, 
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": null, 
+   "name": "Layer 02", 
+   "linetype": -1, 
+   "plot_color": [
+    125, 
+    38, 
+    205, 
+    0
+   ], 
+   "index": 2
+  }, 
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": null, 
+   "name": "Layer 03", 
+   "linetype": -1, 
+   "plot_color": [
+    0, 
+    0, 
+    255, 
+    0
+   ], 
+   "index": 3
+  }, 
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": null, 
+   "name": "Layer 04", 
+   "linetype": -1, 
+   "plot_color": [
+    0, 
+    127, 
+    0, 
+    0
+   ], 
+   "index": 4
+  }, 
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": null, 
+   "name": "Layer 05", 
+   "linetype": -1, 
+   "plot_color": [
+    255, 
+    255, 
+    255, 
+    0
+   ], 
+   "index": 5
+  }, 
+  {
+   "section_style": 0, 
+   "plot_weight": 0.69999999999999996, 
+   "custom_section_style": null, 
+   "name": "Walls", 
+   "linetype": 0, 
+   "plot_color": [
+    255, 
+    0, 
+    0, 
+    0
+   ], 
+   "index": 6
+  }, 
+  {
+   "section_style": -1, 
+   "plot_weight": 0.0, 
+   "custom_section_style": {
+    "BoundaryColor": [
+     120, 
+     60, 
+     0, 
+     0
+    ], 
+    "Id": "00000000-0000-0000-0000-000000000000", 
+    "HatchRotationRadians": 0.0, 
+    "BoundaryPrintColor": [
+     255, 
+     255, 
+     255, 
+     255
+    ], 
+    "BoundaryLinetypeIndex": -2147483647, 
+    "Index": -2147483647, 
+    "HatchPatternColor": [
+     10, 
+     10, 
+     10, 
+     0
+    ], 
+    "HatchPatternPrintColor": [
+     255, 
+     255, 
+     255, 
+     255
+    ], 
+    "Name": "Layer own", 
+    "BoundaryVisible": true, 
+    "SectionFillRule": "ClosedCurves", 
+    "HatchScale": 1.0, 
+    "BackgroundFillMode": "SolidColor", 
+    "BoundaryPlotWeightMillimeters": -10.0, 
+    "BackgroundFillColor": [
+     255, 
+     240, 
+     200, 
+     0
+    ], 
+    "HatchIndex": 0, 
+    "BoundaryWidthScale": 3.0, 
+    "HatchPatternPlotWeightMillimeters": -10.0, 
+    "BackgroundFillPrintColor": [
+     255, 
+     255, 
+     255, 
+     255
+    ]
+   }, 
+   "name": "Own section", 
+   "linetype": -1, 
+   "plot_color": [
+    0, 
+    0, 
+    0, 
+    0
+   ], 
+   "index": 7
+  }
+ ], 
+ "errors": [], 
+ "objects": [
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": true, 
+   "section_style": -1, 
+   "hatch_background": [
+    200, 
+    220, 
+    255, 
+    0
+   ], 
+   "label_style": 0, 
+   "type": "Hatch", 
+   "plot_weight": 0.0, 
+   "layer": 0, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "Filled hatch"
+  }, 
+  {
+   "section_source": 1, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": 0, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 1, 
+   "type": "ClipPlane", 
+   "plot_weight": 0.0, 
+   "layer": 0, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "Section A"
+  }, 
+  {
+   "section_source": 3, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Brep", 
+   "plot_weight": 0.0, 
+   "layer": 0, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "From sectioner"
+  }, 
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Brep", 
+   "plot_weight": 0.0, 
+   "layer": 7, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "On own section layer"
+  }, 
+  {
+   "section_source": 1, 
+   "custom_section_style": {
+    "BoundaryColor": [
+     200, 
+     10, 
+     10, 
+     0
+    ], 
+    "Id": "00000000-0000-0000-0000-000000000000", 
+    "HatchRotationRadians": 0.52359877559829882, 
+    "BoundaryPrintColor": [
+     255, 
+     255, 
+     255, 
+     255
+    ], 
+    "BoundaryLinetypeIndex": -2147483647, 
+    "Index": -2147483647, 
+    "HatchPatternColor": [
+     1, 
+     2, 
+     3, 
+     0
+    ], 
+    "HatchPatternPrintColor": [
+     255, 
+     255, 
+     255, 
+     255
+    ], 
+    "Name": "Own", 
+    "BoundaryVisible": true, 
+    "SectionFillRule": "SolidObjects", 
+    "HatchScale": 3.0, 
+    "BackgroundFillMode": "Viewport", 
+    "BoundaryPlotWeightMillimeters": -10.0, 
+    "BackgroundFillColor": [
+     10, 
+     200, 
+     10, 
+     0
+    ], 
+    "HatchIndex": 1, 
+    "BoundaryWidthScale": 4.0, 
+    "HatchPatternPlotWeightMillimeters": -10.0, 
+    "BackgroundFillPrintColor": [
+     255, 
+     255, 
+     255, 
+     255
+    ]
+   }, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Brep", 
+   "plot_weight": 0.0, 
+   "layer": 0, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "Beam own style"
+  }, 
+  {
+   "section_source": 1, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": 1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Brep", 
+   "plot_weight": 0.0, 
+   "layer": 0, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "Column by object"
+  }, 
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Curve", 
+   "plot_weight": 0.0, 
+   "layer": 6, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "Curve by layer"
+  }, 
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Brep", 
+   "plot_weight": 0.0, 
+   "layer": 6, 
+   "linetype": -1, 
+   "linetype_source": 0, 
+   "plot_weight_source": 0, 
+   "name": "Wall by layer"
+  }, 
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Curve", 
+   "plot_weight": 0.75, 
+   "layer": 0, 
+   "linetype": 2, 
+   "linetype_source": 1, 
+   "plot_weight_source": 1, 
+   "name": "Tapered"
+  }, 
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Curve", 
+   "plot_weight": 0.5, 
+   "layer": 0, 
+   "linetype": 1, 
+   "linetype_source": 1, 
+   "plot_weight_source": 1, 
+   "name": "Wide model"
+  }, 
+  {
+   "section_source": 0, 
+   "custom_section_style": null, 
+   "hatch_boundary": false, 
+   "section_style": -1, 
+   "hatch_background": [
+    255, 
+    255, 
+    255, 
+    255
+   ], 
+   "label_style": 0, 
+   "type": "Curve", 
+   "plot_weight": 0.25, 
+   "layer": 0, 
+   "linetype": 0, 
+   "linetype_source": 1, 
+   "plot_weight_source": 1, 
+   "name": "Wide mm"
+  }
+ ], 
+ "hatch_patterns": [
+  {
+   "fill": "Lines", 
+   "name": "Hatch2", 
+   "index": 0
+  }, 
+  {
+   "fill": "Lines", 
+   "name": "Grid", 
+   "index": 1
+  }
+ ]
+}

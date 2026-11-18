@@ -657,3 +657,131 @@ fn layouts_have_their_own_units() {
     let file = read(&data).unwrap();
     assert_eq!((file.unit, file.page_unit), ("millimetres", "millimetres"));
 }
+
+/// Rhino 8 drafting (`drafting8.3dm`, from make_drafting8.py) as Rhino 9 reads it
+/// (`drafting8.json`): linetypes with a width in millimetres, in centimetres and without unit,
+/// their caps, joins and taper; the section style table, layers and objects with a section
+/// style of the table or their own, a clipping plane's label; the strokes of curves (by object
+/// and by layer, with their print width); a hatch drawn with its background fill and boundary.
+#[test]
+fn rhino8_drafting_is_read_as_in_rhino() {
+    use threedm_read::{LineCap, LineJoin, SectionStyle};
+    let data = load("drafting8.3dm");
+    let file = read(&data).unwrap();
+    let reference: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("drafting8.json")).unwrap()).unwrap();
+    assert!(reference["errors"].as_array().unwrap().is_empty());
+    let color = |q: &serde_json::Value| -> [u8; 4] { std::array::from_fn(|i| q[i].as_u64().unwrap() as u8) };
+    let number = |q: &serde_json::Value| q.as_f64().unwrap();
+    let int = |q: &serde_json::Value| q.as_i64().unwrap();
+    let caps = [LineCap::Round, LineCap::Flat, LineCap::Square];
+    let joins = [LineJoin::Round, LineJoin::Miter, LineJoin::Bevel];
+
+    let rhino = reference["linetypes"].as_array().unwrap();
+    assert_eq!(file.linetypes.len(), rhino.len());
+    for r in rhino {
+        let name = r["name"].as_str().unwrap();
+        let lt = file.linetypes.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(lt.index as i64, int(&r["index"]), "{name}");
+        assert_eq!(lt.id.to_string(), r["id"].as_str().unwrap(), "{name}");
+        assert_eq!(lt.segments, r["segments"].as_array().unwrap().iter().map(number).collect::<Vec<_>>(), "{name}");
+        assert_eq!(lt.width, number(&r["width"]), "{name}");
+        assert_eq!(lt.width_unit as i64, int(&r["width_units"]), "{name}");
+        assert_eq!(lt.cap, caps[int(&r["cap"]) as usize], "{name}");
+        assert_eq!(lt.join, joins[int(&r["join"]) as usize], "{name}");
+        assert_eq!(lt.taper, r["taper"].as_array().unwrap().iter().map(|p| [number(&p[0]), number(&p[1])]).collect::<Vec<_>>(), "{name}");
+        assert_eq!(lt.always_model_distances, r["always_model"].as_bool().unwrap(), "{name}");
+    }
+
+    // every field of a section style, as RhinoCommon names them
+    let same_style = |s: &SectionStyle, r: &serde_json::Value| {
+        let name = r["Name"].as_str().unwrap();
+        assert_eq!(s.name, name);
+        let mode = ["None", "Viewport", "SolidColor"].iter().position(|m| *m == r["BackgroundFillMode"].as_str().unwrap()).unwrap();
+        assert_eq!(s.background_fill_mode as usize, mode, "{name}");
+        assert_eq!(s.background_fill_color, color(&r["BackgroundFillColor"]), "{name}");
+        assert_eq!(s.background_fill_print_color, color(&r["BackgroundFillPrintColor"]), "{name}");
+        assert_eq!(s.boundary_visible, r["BoundaryVisible"].as_bool().unwrap(), "{name}");
+        assert_eq!(s.boundary_color, color(&r["BoundaryColor"]), "{name}");
+        assert_eq!(s.boundary_print_color, color(&r["BoundaryPrintColor"]), "{name}");
+        assert_eq!(s.boundary_width_scale, number(&r["BoundaryWidthScale"]), "{name}");
+        assert_eq!(s.boundary_print_width, number(&r["BoundaryPlotWeightMillimeters"]), "{name}");
+        assert_eq!(s.boundary_linetype_index as i64, int(&r["BoundaryLinetypeIndex"]), "{name}");
+        let rule = ["ClosedCurves", "SolidObjects"].iter().position(|m| *m == r["SectionFillRule"].as_str().unwrap()).unwrap();
+        assert_eq!(s.fill_rule as usize, rule, "{name}");
+        assert_eq!(s.hatch_index as i64, int(&r["HatchIndex"]), "{name}");
+        assert_eq!(s.hatch_scale, number(&r["HatchScale"]), "{name}");
+        assert!((s.hatch_rotation - number(&r["HatchRotationRadians"])).abs() < 1e-12, "{name}");
+        assert_eq!(s.hatch_color, color(&r["HatchPatternColor"]), "{name}");
+        assert_eq!(s.hatch_print_color, color(&r["HatchPatternPrintColor"]), "{name}");
+        assert_eq!(s.hatch_print_width, number(&r["HatchPatternPlotWeightMillimeters"]), "{name}");
+    };
+    let same_own = |s: &Option<SectionStyle>, r: &serde_json::Value, what: &str| match (s, r) {
+        (None, serde_json::Value::Null) => {}
+        (Some(s), r) if !r.is_null() => same_style(s, r),
+        _ => panic!("{what}: {s:?} against {r}"),
+    };
+    let rhino = reference["section_styles"].as_array().unwrap();
+    assert_eq!(file.section_styles.len(), rhino.len());
+    for r in rhino {
+        let s = file.section_styles.iter().find(|s| s.name == r["Name"].as_str().unwrap()).unwrap();
+        assert_eq!(s.index as i64, int(&r["Index"]));
+        assert_eq!(s.id.to_string(), r["Id"].as_str().unwrap());
+        same_style(s, r);
+    }
+
+    for r in reference["layers"].as_array().unwrap() {
+        let name = r["name"].as_str().unwrap();
+        let l = file.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(l.linetype as i64, int(&r["linetype"]), "{name}");
+        assert_eq!(l.plot_weight, number(&r["plot_weight"]), "{name}");
+        assert_eq!(l.plot_color, color(&r["plot_color"]), "{name}");
+        assert_eq!(l.section_style as i64, int(&r["section_style"]), "{name}");
+        same_own(&l.custom_section_style, &r["custom_section_style"], name);
+    }
+
+    for r in reference["objects"].as_array().unwrap() {
+        let name = r["name"].as_str().unwrap();
+        let o = file.objects.iter().find(|o| o.attributes.name == name).unwrap_or_else(|| panic!("{name}"));
+        let a = &o.attributes;
+        assert_eq!(a.layer as i64, int(&r["layer"]), "{name}");
+        assert_eq!((a.linetype as i64, a.linetype_source as i64), (int(&r["linetype"]), int(&r["linetype_source"])), "{name}");
+        assert_eq!((a.plot_weight, a.plot_weight_source as i64), (number(&r["plot_weight"]), int(&r["plot_weight_source"])), "{name}");
+        assert_eq!(a.section_source as i64, int(&r["section_source"]), "{name}");
+        assert_eq!(a.section_style as i64, int(&r["section_style"]), "{name}");
+        same_own(&a.custom_section_style, &r["custom_section_style"], name);
+        assert_eq!(a.clipping_label as i64, int(&r["label_style"]), "{name}");
+        assert_eq!(a.hatch_background.unwrap_or([255; 4]), color(&r["hatch_background"]), "{name}");
+        assert_eq!(a.hatch_boundary, r["hatch_boundary"].as_bool().unwrap(), "{name}");
+        // the stroke of a curve: its linetype's width, cap and join, its print width
+        if r["type"] == "Curve" {
+            let s = o.stroke.as_ref().unwrap_or_else(|| panic!("{name}"));
+            let layer = file.layers.iter().find(|l| l.index == a.layer).unwrap();
+            let index = if a.linetype_source == 1 { a.linetype } else { layer.linetype };
+            let lt = file.linetypes.iter().find(|l| l.index == index).unwrap();
+            assert_eq!((s.linetype, s.width, s.width_unit, s.cap, s.join), (index, lt.width, lt.width_unit, lt.cap, lt.join), "{name}");
+            assert_eq!(s.taper, lt.taper, "{name}");
+            let print = if a.plot_weight_source == 1 { a.plot_weight } else { layer.plot_weight };
+            assert_eq!(s.print_width, print, "{name}");
+        } else {
+            assert!(o.stroke.is_none(), "{name}");
+        }
+    }
+    // widths in model units (millimetres): 2 mm, 4 cm, none for a width without unit
+    let stroke = |name: &str| file.objects.iter().find(|o| o.attributes.name == name).unwrap().stroke.clone().unwrap();
+    assert!((stroke("Wide mm").model_width.unwrap() - 2.0).abs() < 1e-9);
+    assert!((stroke("Wide model").model_width.unwrap() - 40.0).abs() < 1e-9);
+    assert_eq!(stroke("Tapered").model_width, None);
+    assert_eq!((stroke("Curve by layer").print_width, stroke("Curve by layer").print_color), (0.7, [255, 0, 0, 0]));
+
+    // the hatch: its background fill behind its pattern, its boundary (a square 20 by 20)
+    let hatch = file.objects.iter().find(|o| o.attributes.name == "Filled hatch").unwrap();
+    let Geometry::Drawing { lines, meshes, kind } = &hatch.geometry else { panic!("{:?}", hatch.geometry) };
+    assert_eq!(*kind, "Hatch");
+    assert_eq!(meshes.len(), 1);
+    assert_eq!(meshes[0].color, Some([200, 220, 255, 0]));
+    assert_eq!(meshes[0].triangles, 2);
+    let boundary: Vec<f64> = lines.iter().filter(|l| l.len() > 2).map(|l| l.windows(2).map(|w| w[0].distance(w[1])).sum()).collect();
+    assert_eq!(boundary.len(), 1);
+    assert!((boundary[0] - 80.0).abs() < 1e-9, "{boundary:?}");
+    assert!(lines.len() > 5, "the pattern's lines too");
+}

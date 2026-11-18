@@ -27,9 +27,10 @@ the layers, materials and block definitions, the objects, and the records that c
 read by table. Each `Object` has its `Attributes` (id, name, layer, material, colour and their
 sources, visibility, mode and space), its user text and its `Geometry`: `Meshes` (with the
 object type to show), `Lines` (polylines), `Points` (borrowed from the file, read when used),
-`Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions
-and leaders), `ClippingPlane` or `Skipped` (with the reason). `File.views` are the viewports of
-its views, the active one first.
+`Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions,
+leaders, and hatches with a background fill or boundary), `ClippingPlane` or `Skipped` (with the reason). `File.views` are the viewports of
+its views, the active one first. `File.linetypes` and `File.section_styles` are the linetype
+and section style tables; a curve's `Object.stroke` is how its line is drawn wide.
 
 ## threedm-read: from tables to geometry
 
@@ -57,6 +58,16 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   annotation's plane and their dimension style (read in full: sizes, formats, arrowheads, landing,
   text location, length display): extension lines, dimension lines and arcs, arrowheads, the
   value set in the font; one `Geometry::Drawing` of lines and meshes per object;
+- linetypes and section styles (`styles`): `ON_Linetype` with its Rhino 8 items (cap, join,
+  width and its unit, taper, always model distances), `ON_SectionStyle` (background fill, boundary,
+  width scale, fill rule, hatch, the boundary's linetype; Rhino 9's print widths and boundary
+  linetype index, items 12 to 14) in the section style table of Rhino 9 (`0x10000027`, records
+  `0x2000807C`), as the own style of an object (attribute items 29 to 32, 37 and 39) or a layer
+  (layer items 29 to 32 and 35) and by index (Rhino 9: attribute item 43, layer item 39), with
+  the section source and a clipping plane's label (item 40). A curve's `stroke` resolves its
+  linetype (by object or layer, or its own) and print width and colour (by object or layer);
+  a hatch's background fill (attribute item 34) becomes a mesh of that colour behind its
+  pattern's lines and its boundary (item 35) closed polylines, in one `Geometry::Drawing`;
 - point clouds, points and block instances as they are;
 - clipping planes (`ON_ClippingPlaneSurface`): the rectangle of their plane surface, the plane
   (its normal points to the side cut away), enabled, the viewports they clip, their depth and

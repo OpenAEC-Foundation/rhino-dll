@@ -15,7 +15,11 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   polysurfaces (Breps, Rhino 2's layout included), surfaces, extrusions (mitered ends too) and
   SubD objects (their limit surface). Curves become polylines, texts are set in a font at their
   dimension style's height and model space scale, hatches are filled or drawn in their pattern's
-  lines. Dimensions (linear, aligned, angular, radius, diameter, ordinate), centre marks and
+  lines (with Rhino 8's background fill behind them and their boundary when the hatch has them).
+  Linetypes come with Rhino 8's width (and its unit), cap, join and taper; each curve has its
+  `stroke` (that width, also in model units, cap, join, taper and its print width and colour) so
+  that a program can draw wide lines. Section styles (Rhino 9's table, and the own styles of
+  layers and objects of Rhino 8) and where layers, objects and clipping planes take them from. Dimensions (linear, aligned, angular, radius, diameter, ordinate), centre marks and
   leaders are drawn as Rhino draws them: extension lines, dimension lines and arcs, arrowheads of
   the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
   and text). Clipping planes come with their rectangle, plane, depth, the objects they clip

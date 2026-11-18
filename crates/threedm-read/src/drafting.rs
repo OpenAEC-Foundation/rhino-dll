@@ -10,7 +10,8 @@
 //! carries), aligned and turned as stored, filled in its plane.
 
 use super::tessellate::{polyline, read_curve_object};
-use super::{err, Cur, Mesh, Uuid, R, TCODE_ANONYMOUS_CHUNK, TCODE_MODEL_ATTRIBUTES_CHUNK};
+use super::{err, Cur, Geometry, Mesh, Uuid, R, TCODE_ANONYMOUS_CHUNK, TCODE_MODEL_ATTRIBUTES_CHUNK};
+use threedm_model::UNSET_COLOR;
 use glam::{DVec2, DVec3};
 
 pub(super) const ON_HATCH: Uuid = Uuid::parse("0559733B-5332-49d1-A936-0532AC76ADE5");
@@ -282,6 +283,42 @@ impl Hatch {
         }
         out
     }
+
+    /// Its loops as closed polylines in space.
+    pub(super) fn boundary(&self) -> Vec<Vec<DVec3>> {
+        self.loops
+            .iter()
+            .map(|(_, ring)| {
+                let mut line: Vec<DVec3> = ring.iter().map(|p| self.place(*p)).collect();
+                if ring.first() != ring.last() {
+                    line.push(line[0]);
+                }
+                line
+            })
+            .collect()
+    }
+}
+
+/// A hatch with what its attributes add (Rhino 8): its background fill (a colour, unset none)
+/// as a filled mesh of that colour behind its pattern's lines, and its boundary drawn; one
+/// drawing of lines and meshes. A solid hatch hides its background: only its boundary is added.
+pub(super) fn hatch_drawing<'a>(geometry: Geometry<'a>, hatch: &Hatch, background: Option<[u8; 4]>, boundary: bool) -> Geometry<'a> {
+    let background = background.filter(|c| *c != UNSET_COLOR);
+    let (mut lines, meshes) = match geometry {
+        Geometry::Lines(lines, _) => {
+            let fill = background.and_then(|c| hatch.fill().map(|m| Mesh { color: Some(c), ..m }));
+            (lines, fill.into_iter().collect())
+        }
+        Geometry::Meshes(meshes, _) => (Vec::new(), meshes),
+        other => return other,
+    };
+    if boundary {
+        lines.extend(hatch.boundary());
+    }
+    if lines.is_empty() {
+        return Geometry::Meshes(meshes, "Hatch");
+    }
+    Geometry::Drawing { lines, meshes, kind: "Hatch" }
 }
 
 // ---------------------------------------------------------------------------------------------

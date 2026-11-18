@@ -11,14 +11,16 @@
 //! `threedm_query` takes a JSON request and returns a JSON answer, `{"ok": true, "result": …}` or
 //! `{"ok": false, "error": "…"}`; the caller frees it with `threedm_free`. Requests:
 //! - `{"query": "info"}`: the Rhino version, the application that saved the file, its units,
-//!   the number of layers, materials, bitmaps, blocks, lights and objects, the views (layouts
+//!   the number of layers, materials, bitmaps, blocks, lights and objects, the linetypes (with
+//!   their Rhino 8 width, cap, join and taper) and section styles, the views (layouts
 //!   with their `page`: paper in mm and page number) and the layouts alone, the objects by
 //!   kind, and the records that could not be read;
 //! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "bitmaps"}`,
 //!   `{"query": "blocks"}`, `{"query": "lights"}`: the tables (materials with their colours,
 //!   textures and physically based parameters, embedded bitmaps by name, file and byte count);
 //! - `{"query": "objects", "limit": 10, "offset": 0}`: objects with their id, name, kind, layer,
-//!   attributes and user text, `{"total", "objects"}`;
+//!   attributes (section source, style and own style, clipping label) and user text, and of a
+//!   curve its `stroke` (linetype width, cap, join, taper, print width), `{"total", "objects"}`;
 //! - `{"query": "object", "id": "…"}`: one object by its id, with its geometry: meshes
 //!   (`positions`, triangle `indices`, optional `normals`, `texture_coordinates` and `colors`),
 //!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance,
@@ -29,7 +31,7 @@
 use std::ffi::{c_char, CStr, CString};
 
 use serde_json::{json, Value};
-use threedm_read::{Document, File, Geometry, Light, LightKind, Material, Mesh, RhinoObject};
+use threedm_read::{Document, File, Geometry, Light, LightKind, LineCap, LineJoin, Linetype, Material, Mesh, RhinoObject, SectionStyle, Stroke};
 
 /// An open document behind the C ABI.
 pub struct ThreedmDocument(Document);
@@ -79,7 +81,57 @@ fn object_summary(o: &RhinoObject<'_>) -> Value {
         "custom_linetype": a.custom_linetype,
         "hatch_background": a.hatch_background,
         "hatch_boundary": a.hatch_boundary,
+        "custom_linetype_style": a.custom_linetype_style.as_ref().map(linetype_json),
+        "section_source": a.section_source,
+        "section_style": a.section_style,
+        "custom_section_style": a.custom_section_style.as_ref().map(section_style_json),
+        "clipping_label": a.clipping_label,
+        "stroke": o.stroke.as_ref().map(stroke_json),
         "user_text": user,
+    })
+}
+
+fn cap(c: LineCap) -> &'static str {
+    match c {
+        LineCap::Round => "round",
+        LineCap::Flat => "flat",
+        LineCap::Square => "square",
+    }
+}
+
+fn join(j: LineJoin) -> &'static str {
+    match j {
+        LineJoin::Round => "round",
+        LineJoin::Miter => "miter",
+        LineJoin::Bevel => "bevel",
+    }
+}
+
+fn linetype_json(l: &Linetype) -> Value {
+    json!({
+        "index": l.index, "id": l.id.to_string(), "name": l.name, "segments": l.segments,
+        "width": l.width, "width_unit": l.width_unit, "cap": cap(l.cap), "join": join(l.join),
+        "taper": l.taper, "always_model_distances": l.always_model_distances,
+    })
+}
+
+fn stroke_json(s: &Stroke) -> Value {
+    json!({
+        "linetype": s.linetype, "width": s.width, "width_unit": s.width_unit, "model_width": s.model_width,
+        "cap": cap(s.cap), "join": join(s.join), "taper": s.taper, "print_width": s.print_width, "print_color": s.print_color,
+    })
+}
+
+fn section_style_json(s: &SectionStyle) -> Value {
+    json!({
+        "index": s.index, "id": s.id.to_string(), "name": s.name,
+        "background_fill_mode": s.background_fill_mode, "background_fill_color": s.background_fill_color,
+        "background_fill_print_color": s.background_fill_print_color,
+        "boundary_visible": s.boundary_visible, "boundary_color": s.boundary_color, "boundary_print_color": s.boundary_print_color,
+        "boundary_width_scale": s.boundary_width_scale, "boundary_print_width": s.boundary_print_width,
+        "boundary_linetype_index": s.boundary_linetype_index, "boundary_linetype": s.boundary_linetype.as_ref().map(linetype_json),
+        "fill_rule": s.fill_rule, "hatch_index": s.hatch_index, "hatch_scale": s.hatch_scale, "hatch_rotation": s.hatch_rotation,
+        "hatch_color": s.hatch_color, "hatch_print_color": s.hatch_print_color, "hatch_print_width": s.hatch_print_width,
     })
 }
 
@@ -216,6 +268,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "named_views": file.named_views.iter().map(view_json).collect::<Vec<_>>(),
                 "layouts": file.views.iter().filter(|v| v.page.is_some()).map(view_json).collect::<Vec<_>>(),
                 "groups": file.groups.iter().map(|(i, n)| json!({"index": i, "name": n})).collect::<Vec<_>>(),
+                "linetypes": file.linetypes.iter().map(linetype_json).collect::<Vec<_>>(),
+                "section_styles": file.section_styles.iter().map(section_style_json).collect::<Vec<_>>(),
                 "kinds": kinds,
                 "damaged": file.damaged,
             }))
@@ -223,7 +277,13 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
         "layers" => Ok(file
             .layers
             .iter()
-            .map(|l| json!({"index": l.index, "name": l.name, "id": l.id.to_string(), "parent": l.parent.to_string(), "color": l.color, "visible": l.visible, "material": l.material}))
+            .map(|l| {
+                json!({
+                    "index": l.index, "name": l.name, "id": l.id.to_string(), "parent": l.parent.to_string(), "color": l.color, "visible": l.visible,
+                    "material": l.material, "linetype": l.linetype, "plot_color": l.plot_color, "plot_weight": l.plot_weight,
+                    "section_style": l.section_style, "custom_section_style": l.custom_section_style.as_ref().map(section_style_json),
+                })
+            })
             .collect()),
         "materials" => Ok(file.materials.iter().map(material_json).collect()),
         "bitmaps" => Ok(file.bitmaps.iter().map(|b| json!({"name": b.name, "file": b.file, "bytes": b.data.as_ref().map(Vec::len)})).collect()),
