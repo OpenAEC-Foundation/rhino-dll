@@ -785,3 +785,179 @@ fn rhino8_drafting_is_read_as_in_rhino() {
     assert!((boundary[0] - 80.0).abs() < 1e-9, "{boundary:?}");
     assert!(lines.len() > 5, "the pattern's lines too");
 }
+
+/// The document settings (`settings.3dm`, from make_settings.py) as Rhino 9 reads them
+/// (`settings.json`): the earth anchor point and model base point, named and view construction
+/// planes, mesh, grid and render settings, the current entries, named layer states, a snapshot,
+/// a history record, document user text, the plug-in tables, and the fonts of the texts, the
+/// dimension and the dimension styles.
+#[test]
+fn settings_are_read_as_in_rhino() {
+    let data = load("settings.3dm");
+    let file = read(&data).unwrap();
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("settings.json")).unwrap()).unwrap();
+    let point = |q: &serde_json::Value| DVec3::new(q[0].as_f64().unwrap(), q[1].as_f64().unwrap(), q[2].as_f64().unwrap());
+    let number = |q: &serde_json::Value| q.as_f64().unwrap();
+    let int = |q: &serde_json::Value| q.as_i64().unwrap();
+    let flag = |q: &serde_json::Value| q.as_bool().unwrap();
+    let text = |q: &serde_json::Value| q.as_str().unwrap_or("").to_string();
+    let color = |q: &serde_json::Value| -> [u8; 4] { std::array::from_fn(|i| q[i].as_u64().unwrap() as u8) };
+    let s = &file.settings;
+    assert!(file.damaged.is_empty(), "{:?}", file.damaged);
+
+    // the earth anchor point and the model base point
+    let e = s.earth_anchor.as_ref().unwrap();
+    let re = &r["earth_anchor"];
+    for (field, ours) in [("latitude", e.latitude), ("longitude", e.longitude), ("elevation", e.elevation)] {
+        assert_eq!(ours, number(&re[field]), "{field}");
+    }
+    for (field, ours) in [("model_point", e.model_point), ("model_north", e.model_north), ("model_east", e.model_east)] {
+        assert_eq!(ours, point(&re[field]), "{field}");
+    }
+    assert_eq!((e.name.as_str(), e.description.as_str()), (re["name"].as_str().unwrap(), re["description"].as_str().unwrap()));
+    assert_eq!(e.coordinate_system as i64, int(&re["coordinate_system"]));
+    assert_eq!(s.model_basepoint, point(&r["model_basepoint"]));
+    assert_eq!(s.model_url, text(&r["model_url"]));
+
+    // construction planes: named, and of each view
+    let cplane = |ours: &threedm_read::ConstructionPlane, rhino: &serde_json::Value, what: &str| {
+        let plane = &rhino["plane"];
+        for (field, v) in [("origin", ours.origin), ("x", ours.x), ("y", ours.y)] {
+            assert!(v.distance(point(&plane[field])) < 1e-12, "{what} {field}: {v} {}", plane[field]);
+        }
+        assert_eq!((ours.grid_spacing, ours.snap_spacing), (number(&rhino["grid_spacing"]), number(&rhino["snap_spacing"])), "{what}");
+        assert_eq!((ours.grid_line_count as i64, ours.thick_frequency as i64), (int(&rhino["grid_line_count"]), int(&rhino["thick_frequency"])), "{what}");
+        assert_eq!(ours.depth_buffered, flag(&rhino["depth_buffered"]), "{what}");
+    };
+    let named = r["named_cplanes"].as_array().unwrap();
+    assert_eq!(s.named_cplanes.len(), named.len());
+    for (ours, rhino) in s.named_cplanes.iter().zip(named) {
+        assert_eq!(ours.name, text(&rhino["name"]));
+        cplane(ours, rhino, &ours.name);
+    }
+    for view in r["views"].as_array().unwrap() {
+        let id = view["id"].as_str().unwrap();
+        let (_, ours) = s.view_cplanes.iter().find(|(v, _)| v.to_string() == id).unwrap_or_else(|| panic!("view {id}"));
+        cplane(ours, &view["cplane"], view["name"].as_str().unwrap());
+    }
+
+    // mesh settings
+    for (field, ours) in [("render_mesh", &s.render_mesh), ("analysis_mesh", &s.analysis_mesh), ("custom_render_mesh", &s.custom_render_mesh)] {
+        let (m, rm) = (ours.as_ref().unwrap(), &r[field]);
+        assert_eq!((m.texture_range as i64, m.jagged_seams, m.refine, m.simple_planes, m.compute_curvature), (int(&rm["texture_range"]), flag(&rm["jagged_seams"]), flag(&rm["refine_grid"]), flag(&rm["simple_planes"]), flag(&rm["compute_curvature"])), "{field}");
+        assert_eq!((m.grid_min_count as i64, m.grid_max_count as i64), (int(&rm["grid_min_count"]), int(&rm["grid_max_count"])), "{field}");
+        for (name, v) in [("grid_angle", m.grid_angle), ("grid_aspect_ratio", m.grid_aspect_ratio), ("grid_amplification", m.grid_amplification), ("tolerance", m.tolerance), ("relative_tolerance", m.relative_tolerance), ("minimum_edge_length", m.min_edge_length), ("maximum_edge_length", m.max_edge_length), ("refine_angle", m.refine_angle)] {
+            assert_eq!(v, number(&rm[name]), "{field} {name}");
+        }
+    }
+
+    // grid defaults, render settings, the current entries
+    let (g, rg) = (s.grid.as_ref().unwrap(), &r["grid"]);
+    assert_eq!((g.grid_spacing, g.snap_spacing), (number(&rg["grid_spacing"]), number(&rg["snap_spacing"])));
+    assert_eq!((g.grid_line_count as i64, g.thick_frequency as i64), (int(&rg["grid_line_count"]), int(&rg["thick_frequency"])));
+    assert_eq!((g.show_grid, g.show_axes, g.show_world_axes), (flag(&rg["show_grid"]), flag(&rg["show_axes"]), flag(&rg["show_world_axes"])));
+    let (rs, rr) = (s.render.as_ref().unwrap(), &r["render"]);
+    assert_eq!((rs.ambient, rs.background_color, rs.background_bottom), (color(&rr["ambient"]), color(&rr["background_top"]), color(&rr["background_bottom"])));
+    let flags = [rs.use_hidden_lights, rs.depth_cue, rs.flat_shade, rs.render_backfaces, rs.render_points, rs.render_curves, rs.render_isoparams, rs.render_mesh_edges, rs.render_annotations, rs.scale_background, rs.transparent_background, !rs.custom_image_size];
+    let names = ["use_hidden_lights", "depth_cue", "flat_shade", "render_backfaces", "render_points", "render_curves", "render_isoparams", "render_mesh_edges", "render_annotations", "scale_background", "transparent_background", "use_viewport_size"];
+    for (ours, name) in flags.iter().zip(names) {
+        assert_eq!(*ours, flag(&rr[name]), "{name}");
+    }
+    assert_eq!((rs.background_style as i64, rs.antialias as i64, rs.shadowmap as i64, rs.image_unit as i64, rs.rendering_source as i64), (int(&rr["background_style"]), int(&rr["antialias"]), int(&rr["shadowmap_level"]), int(&rr["image_unit"]), int(&rr["render_source"])));
+    assert_eq!((rs.image_dpi, [rs.image_width as i64, rs.image_height as i64]), (number(&rr["image_dpi"]), [int(&rr["image_size"][0]), int(&rr["image_size"][1])]));
+    assert_eq!((rs.named_view.clone(), rs.snapshot.clone(), rs.specific_viewport.clone()), (text(&rr["named_view"]), text(&rr["snapshot"]), text(&rr["specific_viewport"])));
+    let (c, rc) = (&s.current, &r["current"]);
+    for (field, ours) in [("layer", c.layer), ("material", c.material), ("linetype", c.linetype), ("text_style", c.text_style), ("dimension_style", c.dimension_style)] {
+        assert_eq!(ours.to_string(), rc[field].as_str().unwrap(), "current {field}");
+    }
+    // Rhino gives the built-in Solid hatch pattern (not in the file's table) as nil
+    assert_eq!(c.hatch_pattern.to_string(), "b319435d-86b6-4d89-972d-1f75fef0d950");
+    assert_eq!(rc["hatch_pattern"].as_str().unwrap(), "00000000-0000-0000-0000-000000000000");
+    // RhinoCommon gives these two colours with their alpha as stored (the others as opacity)
+    let stored = |q: &serde_json::Value| -> [u8; 4] { std::array::from_fn(|i| if i == 3 { 255 - q[i].as_u64().unwrap() as u8 } else { q[i].as_u64().unwrap() as u8 }) };
+    assert_eq!((c.color, c.plot_color, c.wire_density as i64), (stored(&rc["color"]), stored(&rc["plot_color"]), int(&rc["wire_density"])));
+    assert_eq!(s.active_view.to_string(), r["active_view"].as_str().unwrap());
+    assert_eq!((s.linetype_display_scale, s.save_texture_bitmaps, s.idef_link_update as i64), (number(&r["linetype_display_scale"]), flag(&r["save_texture_bitmaps"]), int(&r["idef_link_update"])));
+
+    // the plug-in tables, the layer states, the snapshot, the document user text
+    let mut tables: Vec<String> = file.user_tables.iter().map(|t| t.plugin.to_string()).filter(|p| p != "06f3218e-f5ec-4f6c-b74c-14583f0ed7bc").collect();
+    let mut rhino: Vec<String> = r["plugin_data"].as_array().unwrap().iter().map(text).collect();
+    tables.sort();
+    rhino.sort();
+    assert_eq!(tables, rhino);
+    let states: Vec<&str> = file.layer_states.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(states, r["layer_states"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>());
+    let roofs = |state: usize| file.layer_states[state].layers.iter().find(|l| l.name == "Roofs").unwrap().visible;
+    assert!(roofs(0) && !roofs(1));
+    assert_eq!(file.snapshots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Snap one"]);
+    let strings: Vec<(String, String)> = r["strings"].as_array().unwrap().iter().map(|p| (text(&p[0]), text(&p[1]))).collect();
+    assert_eq!(file.document_user_text, strings);
+
+    // the history record of the extrusion: from the circle
+    for h in r["history"].as_array().unwrap() {
+        let record = file.history.iter().find(|x| x.descendants.iter().any(|d| d.to_string() == h["id"].as_str().unwrap())).expect("its history record");
+        let parents: Vec<String> = h["parents"].as_array().unwrap().iter().map(text).collect();
+        assert_eq!(record.antecedents.iter().map(|a| a.to_string()).collect::<Vec<_>>(), parents);
+        assert!(!record.values.is_empty() && !record.command.is_nil());
+    }
+    assert_eq!(file.history.len(), r["history"].as_array().unwrap().len());
+
+    // fonts: of each text and the dimension (its first character's), of each dimension style
+    for t in r["texts"].as_array().unwrap() {
+        let name = t["name"].as_str().unwrap();
+        let o = file.objects.iter().find(|o| o.attributes.id.to_string() == t["id"].as_str().unwrap()).unwrap();
+        let (f, rf) = (o.font.as_ref().unwrap_or_else(|| panic!("{name}: no font")), &t["first_char_font"]);
+        assert_eq!((f.family.as_str(), f.bold, f.italic), (rf["family"].as_str().unwrap(), flag(&rf["bold"]), flag(&rf["italic"])), "{name}");
+    }
+    let styles = r["dim_styles"].as_array().unwrap();
+    assert_eq!(file.dim_styles.len(), styles.len());
+    for rs in styles {
+        let d = file.dim_styles.iter().find(|d| d.id.to_string() == rs["id"].as_str().unwrap()).unwrap();
+        assert_eq!((d.name.as_str(), d.index as i64), (rs["name"].as_str().unwrap(), int(&rs["index"])));
+        let (f, rf) = (d.font.as_ref().unwrap(), &rs["font"]);
+        for (field, ours) in [("family", &f.family), ("face", &f.face), ("postscript", &f.postscript), ("logfont", &f.logfont)] {
+            assert_eq!(ours, rf[field].as_str().unwrap(), "{} {field}", d.name);
+        }
+        assert_eq!((f.weight as i64, f.style as i64, f.bold, f.italic, f.underlined, f.strikeout), (int(&rf["weight"]), int(&rf["style"]), flag(&rf["bold"]), flag(&rf["italic"]), flag(&rf["underlined"]), flag(&rf["strikeout"])), "{}", d.name);
+    }
+}
+
+/// The settings, fonts and plug-in tables of McNeel's openNURBS example files (not in this
+/// repository: set `OPENNURBS_EXAMPLES` to the `example_files` folder of an openNURBS
+/// checkout): no font table, history record or user table is damaged; every file from Rhino 4
+/// on has its render mesh settings; the dimension styles of Rhino 4 and 5 files have the font
+/// of their text style.
+#[test]
+fn settings_of_the_opennurbs_examples_are_read() {
+    let Ok(folder) = std::env::var("OPENNURBS_EXAMPLES") else { return };
+    let mut files = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(folder)];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("3dm")) {
+                files.push(path);
+            }
+        }
+    }
+    let (mut fonts, mut styles_with_fonts, mut texts_with_fonts, mut tables) = (0, 0, 0, 0);
+    for path in &files {
+        let data = std::fs::read(path).unwrap();
+        let Ok(file) = read(&data) else { continue };
+        for table in ["fonts", "history records", "user tables", "dimension styles"] {
+            assert!(!file.damaged.contains_key(table), "{} {table}", path.display());
+        }
+        if file.versions.archive >= 4 {
+            assert!(file.settings.render_mesh.is_some(), "{}", path.display());
+        }
+        fonts += file.fonts.len();
+        styles_with_fonts += file.dim_styles.iter().filter(|d| d.font.as_ref().is_some_and(|f| !f.family.is_empty())).count();
+        texts_with_fonts += file.objects.iter().filter(|o| o.font.is_some()).count();
+        tables += file.user_tables.len();
+        eprintln!("{}: {} fonts, {} styles, {} texts with a font, {} user tables", path.display(), file.fonts.len(), file.dim_styles.len(), file.objects.iter().filter(|o| o.font.is_some()).count(), file.user_tables.len());
+    }
+    eprintln!("{fonts} fonts, {styles_with_fonts} styles with a font, {texts_with_fonts} texts with a font, {tables} user tables");
+    assert!(fonts > 0 && styles_with_fonts > 0 && texts_with_fonts > 0 && tables > 0);
+}

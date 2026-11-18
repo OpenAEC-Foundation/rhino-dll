@@ -364,6 +364,11 @@ pub(super) struct DimStyle {
     /// `ON_DimStyle::LengthDisplay`: 0 model units, 3 mm, 4 cm, 5 m, 6 km, 7 and 1 inches, 8 and
     /// 2 feet.
     pub(super) length_display: u32,
+    pub(super) name: String,
+    /// Its font (Rhino 6 and later).
+    pub(super) font: Option<threedm_model::Font>,
+    /// Its text style, by index into the font table (Rhino 4 and 5).
+    pub(super) text_style: i32,
 }
 
 impl Default for DimStyle {
@@ -394,6 +399,9 @@ impl Default for DimStyle {
             landing: 0.125,
             text_location: 0,
             length_display: 0,
+            name: String::new(),
+            font: None,
+            text_style: -1,
         }
     }
 }
@@ -416,6 +424,19 @@ pub(super) fn read_dim_style(mut c: Cur<'_>) -> R<Option<DimStyle>> {
     }
     let id = if attributes.u8()? == 1 { attributes.uuid()? } else { Uuid::default() };
     let mut d = DimStyle { id, ..DimStyle::default() };
+    // then its component type, index and name
+    let _ = (|| -> R<()> {
+        if attributes.u8()? == 1 {
+            attributes.i32()?;
+        }
+        if attributes.u8()? == 1 {
+            d.index = attributes.i32()?;
+        }
+        if attributes.u8()? == 1 {
+            d.name = attributes.wstring()?;
+        }
+        Ok(())
+    })();
     d.ext_extension = b.f64()?;
     d.ext_offset = b.f64()?;
     d.arrow = b.f64()?;
@@ -450,7 +471,7 @@ fn read_v5_dim_style(c: &mut Cur<'_>) -> R<DimStyle> {
         return err("a dimension style of an unknown version");
     }
     let mut d = DimStyle { index: c.i32()?, ..DimStyle::default() };
-    c.wstring()?; // name
+    d.name = c.wstring()?;
     d.ext_extension = c.f64()?;
     d.ext_offset = c.f64()?;
     d.arrow = c.f64()?;
@@ -467,7 +488,7 @@ fn read_v5_dim_style(c: &mut Cur<'_>) -> R<DimStyle> {
     c.u32()?; // angle format
     d.length_resolution = c.i32()?.clamp(0, 10);
     d.angle_resolution = c.i32()?.clamp(0, 10);
-    c.i32()?; // text style
+    d.text_style = c.i32()?;
     if minor >= 1 {
         d.height = c.f64()?;
     }
@@ -622,7 +643,7 @@ fn dim_style_rest(b: &mut Cur<'_>, minor: i32, d: &mut DimStyle) -> R<()> {
     if minor <= 1 {
         return Ok(());
     }
-    b.chunk()?; // font
+    d.font = super::fonts::read_font(b.chunk()?.body).ok();
     if minor <= 2 {
         return Ok(());
     }
@@ -649,6 +670,8 @@ fn dim_style_rest(b: &mut Cur<'_>, minor: i32, d: &mut DimStyle) -> R<()> {
 /// its text, plane, style and the style of its own.
 pub(super) struct Annotation {
     pub(super) text: String,
+    /// The text as stored: rich text (RTF) with its fonts.
+    pub(super) rich: String,
     pub(super) rotation: f64,
     pub(super) h_align: u32,
     pub(super) v_align: u32,
@@ -700,7 +723,7 @@ pub(super) fn read_annotation(c: &mut Cur<'_>) -> R<Annotation> {
     if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
         return err("an annotation with an invalid plane");
     }
-    Ok(Annotation { text: plain_text(&rich), rotation: if rotation.is_finite() { rotation } else { 0.0 }, h_align, v_align, style, origin, x, y, kind, own_style, allow_scaling })
+    Ok(Annotation { text: plain_text(&rich), rich, rotation: if rotation.is_finite() { rotation } else { 0.0 }, h_align, v_align, style, origin, x, y, kind, own_style, allow_scaling })
 }
 
 /// A text: its plain text, plane, height (when it overrides its style's), style, rotation and

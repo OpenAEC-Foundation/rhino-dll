@@ -1,0 +1,683 @@
+{
+ "strings": [
+  [
+   "Project", 
+   "Settings test"
+  ], 
+  [
+   "Site\\Parcel", 
+   "A-12"
+  ]
+ ], 
+ "steps": {
+  "snapshot": true, 
+  "state_all": 0, 
+  "extrude": true, 
+  "state_walls": 1
+ }, 
+ "views": [
+  {
+   "id": "37e7797b-f30d-776e-92cd-8c1a1cc3dc8d", 
+   "name": "Perspective", 
+   "cplane": {
+    "thick_frequency": 10, 
+    "name": null, 
+    "snap_spacing": 10.0, 
+    "show_grid": true, 
+    "grid_spacing": 10.0, 
+    "grid_line_count": 500, 
+    "depth_buffered": true, 
+    "show_z_axis": false, 
+    "show_axes": true, 
+    "plane": {
+     "x": [
+      1.0, 
+      0.0, 
+      0.0
+     ], 
+     "origin": [
+      0.0, 
+      0.0, 
+      0.0
+     ], 
+     "y": [
+      0.0, 
+      1.0, 
+      0.0
+     ]
+    }
+   }
+  }, 
+  {
+   "id": "57a340a2-4b61-c80a-5c99-90fd4c0dd0ab", 
+   "name": "Top", 
+   "cplane": {
+    "thick_frequency": 4, 
+    "name": null, 
+    "snap_spacing": 0.5, 
+    "show_grid": true, 
+    "grid_spacing": 2.5, 
+    "grid_line_count": 40, 
+    "depth_buffered": true, 
+    "show_z_axis": false, 
+    "show_axes": true, 
+    "plane": {
+     "x": [
+      1.0, 
+      0.0, 
+      -0.0
+     ], 
+     "origin": [
+      5.0, 
+      6.0, 
+      0.0
+     ], 
+     "y": [
+      -0.0, 
+      1.0, 
+      0.0
+     ]
+    }
+   }
+  }, 
+  {
+   "id": "1bb8f135-bb15-e5c6-b90b-4e6b2ce766d3", 
+   "name": "Front", 
+   "cplane": {
+    "thick_frequency": 10, 
+    "name": null, 
+    "snap_spacing": 10.0, 
+    "show_grid": true, 
+    "grid_spacing": 10.0, 
+    "grid_line_count": 500, 
+    "depth_buffered": true, 
+    "show_z_axis": false, 
+    "show_axes": true, 
+    "plane": {
+     "x": [
+      1.0, 
+      0.0, 
+      0.0
+     ], 
+     "origin": [
+      0.0, 
+      0.0, 
+      0.0
+     ], 
+     "y": [
+      0.0, 
+      0.0, 
+      1.0
+     ]
+    }
+   }
+  }, 
+  {
+   "id": "5a3792dc-56a4-48e0-c9b6-e338cfbb30ba", 
+   "name": "Right", 
+   "cplane": {
+    "thick_frequency": 10, 
+    "name": null, 
+    "snap_spacing": 10.0, 
+    "show_grid": true, 
+    "grid_spacing": 10.0, 
+    "grid_line_count": 500, 
+    "depth_buffered": true, 
+    "show_z_axis": false, 
+    "show_axes": true, 
+    "plane": {
+     "x": [
+      0.0, 
+      1.0, 
+      -0.0
+     ], 
+     "origin": [
+      0.0, 
+      0.0, 
+      0.0
+     ], 
+     "y": [
+      0.0, 
+      0.0, 
+      1.0
+     ]
+    }
+   }
+  }
+ ], 
+ "custom_render_mesh": {
+  "grid_min_count": 0, 
+  "minimum_edge_length": 0.01, 
+  "grid_max_count": 0, 
+  "minimum_tolerance": 0.0, 
+  "refine_angle": 0.0, 
+  "grid_aspect_ratio": 6.0, 
+  "compute_curvature": false, 
+  "maximum_edge_length": 3.0, 
+  "simple_planes": true, 
+  "texture_range": 2, 
+  "refine_grid": false, 
+  "closed_object_post_process": false, 
+  "tolerance": 0.050000000000000003, 
+  "relative_tolerance": 0.5, 
+  "double_precision": false, 
+  "grid_angle": 0.29999999999999999, 
+  "grid_amplification": 0.0, 
+  "jagged_seams": false
+ }, 
+ "linetype_display_scale": 1.0, 
+ "history": [
+  {
+   "id": "380285b1-4bf0-4802-bd13-8264a622203e", 
+   "parents": [
+    "ad82e26a-2a97-40e3-9a62-899a432fae88"
+   ]
+  }
+ ], 
+ "dim_styles": [
+  {
+   "id": "c83720e0-0fb0-746a-ac5c-8810057adafe", 
+   "index": 0, 
+   "name": "Millimeter Architectural", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }
+  }, 
+  {
+   "id": "413e2378-1ede-2ada-a2ed-13df4dea8f47", 
+   "index": 1, 
+   "name": "Millimeter Large", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }
+  }, 
+  {
+   "id": "881f647b-7f90-ed70-3149-75095f6cee64", 
+   "index": 2, 
+   "name": "Millimeter Small", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }
+  }, 
+  {
+   "id": "3ac83759-7b4c-b4e6-566d-142b43ec7086", 
+   "index": 3, 
+   "name": "Engrave", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "SLF-RHN Architect", 
+    "logfont": "SLF-RHN Architect", 
+    "style": 1, 
+    "postscript": "SLFRHNArchitect-Regular", 
+    "family": "SLF-RHN Architect", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Regular"
+   }
+  }, 
+  {
+   "id": "52d81195-2155-4e6a-a60d-494d85d3094e", 
+   "index": 4, 
+   "name": "Courier style", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Courier New", 
+    "logfont": "Courier New", 
+    "style": 1, 
+    "postscript": "CourierNewPSMT", 
+    "family": "Courier New", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }
+  }, 
+  {
+   "id": "bbd6de85-25ac-45da-afb9-f2ddec68006a", 
+   "index": 5, 
+   "name": "Times italic", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": true, 
+    "quartet": "Times New Roman", 
+    "logfont": "Times New Roman", 
+    "style": 2, 
+    "postscript": "TimesNewRomanPS-ItalicMT", 
+    "family": "Times New Roman", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Cursief"
+   }
+  }
+ ], 
+ "current": {
+  "dimension_style": "413e2378-1ede-2ada-a2ed-13df4dea8f47", 
+  "hatch_pattern": "00000000-0000-0000-0000-000000000000", 
+  "material": "00000000-0000-0000-0000-000000000000", 
+  "linetype": "00000000-0000-0000-0000-000000000000", 
+  "text_style": "00000000-0000-0000-0000-000000000000", 
+  "plot_color": [
+   255, 
+   255, 
+   255, 
+   0
+  ], 
+  "layer": "4c16f482-2350-c23e-4745-af37e0358f12", 
+  "color": [
+   0, 
+   0, 
+   0, 
+   255
+  ], 
+  "wire_density": 1
+ }, 
+ "model_basepoint": [
+  0.0, 
+  0.0, 
+  0.0
+ ], 
+ "save_texture_bitmaps": true, 
+ "render_mesh": {
+  "grid_min_count": 0, 
+  "minimum_edge_length": 0.01, 
+  "grid_max_count": 0, 
+  "minimum_tolerance": 0.0, 
+  "refine_angle": 0.0, 
+  "grid_aspect_ratio": 6.0, 
+  "compute_curvature": false, 
+  "maximum_edge_length": 3.0, 
+  "simple_planes": true, 
+  "texture_range": 2, 
+  "refine_grid": false, 
+  "closed_object_post_process": false, 
+  "tolerance": 0.050000000000000003, 
+  "relative_tolerance": 0.5, 
+  "double_precision": false, 
+  "grid_angle": 0.29999999999999999, 
+  "grid_amplification": 0.0, 
+  "jagged_seams": false
+ }, 
+ "model_url": null, 
+ "idef_link_update": 1, 
+ "layer_states": [
+  "All on", 
+  "Walls only"
+ ], 
+ "circle": "ad82e26a-2a97-40e3-9a62-899a432fae88", 
+ "active_view": "57a340a2-4b61-c80a-5c99-90fd4c0dd0ab", 
+ "named_cplanes": [
+  {
+   "thick_frequency": 5, 
+   "name": "Tilted", 
+   "snap_spacing": 1.0, 
+   "show_grid": true, 
+   "grid_spacing": 1.0, 
+   "grid_line_count": 70, 
+   "depth_buffered": true, 
+   "show_z_axis": false, 
+   "show_axes": true, 
+   "plane": {
+    "x": [
+     -0.70710678118654746, 
+     0.0, 
+     0.70710678118654746
+    ], 
+    "origin": [
+     1.0, 
+     2.0, 
+     3.0
+    ], 
+    "y": [
+     0.0, 
+     -1.0, 
+     0.0
+    ]
+   }
+  }, 
+  {
+   "thick_frequency": 5, 
+   "name": "Raised", 
+   "snap_spacing": 1.0, 
+   "show_grid": true, 
+   "grid_spacing": 1.0, 
+   "grid_line_count": 70, 
+   "depth_buffered": true, 
+   "show_z_axis": false, 
+   "show_axes": true, 
+   "plane": {
+    "x": [
+     1.0, 
+     0.0, 
+     -0.0
+    ], 
+    "origin": [
+     0.0, 
+     0.0, 
+     4.0
+    ], 
+    "y": [
+     -0.0, 
+     1.0, 
+     0.0
+    ]
+   }
+  }
+ ], 
+ "plugin_data": [
+  "16592d58-4a2f-401d-bf5e-3b87741c1b1b", 
+  "213a2661-a9ec-4ac4-867a-bc8cabe5ae29", 
+  "73b88f43-c32c-4306-93b5-1d0082fffee8"
+ ], 
+ "earth_anchor": {
+  "elevation": 2.5, 
+  "kml_heading": 323.13010235415601, 
+  "elevation_zero": 0, 
+  "model_point": [
+   100.0, 
+   200.0, 
+   0.0
+  ], 
+  "description": "Anchor of the settings test", 
+  "kml_tilt": 0.0, 
+  "kml_roll": 0.0, 
+  "coordinate_system": 0, 
+  "latitude": 52.011577000000003, 
+  "longitude": 4.3570679999999999, 
+  "model_east": [
+   0.80000000000000004, 
+   -0.59999999999999998, 
+   0.0
+  ], 
+  "name": "Delft site", 
+  "model_north": [
+   0.59999999999999998, 
+   0.80000000000000004, 
+   0.0
+  ]
+ }, 
+ "analysis_mesh": {
+  "grid_min_count": 16, 
+  "minimum_edge_length": 0.0001, 
+  "grid_max_count": 0, 
+  "minimum_tolerance": 0.0, 
+  "refine_angle": 0.3490658503988659, 
+  "grid_aspect_ratio": 0.0, 
+  "compute_curvature": true, 
+  "maximum_edge_length": 0.0, 
+  "simple_planes": false, 
+  "texture_range": 1, 
+  "refine_grid": true, 
+  "closed_object_post_process": false, 
+  "tolerance": 0.0, 
+  "relative_tolerance": 0.80000000000000004, 
+  "double_precision": false, 
+  "grid_angle": 0.3490658503988659, 
+  "grid_amplification": 1.0, 
+  "jagged_seams": false
+ }, 
+ "texts": [
+  {
+   "plain": "Arial bold", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_italic": false, 
+   "style": "413e2378-1ede-2ada-a2ed-13df4dea8f47", 
+   "name": "Arial bold", 
+   "id": "d3978b9b-f1b9-4ccf-9e8d-85ddd063f122", 
+   "first_char_font": {
+    "strikeout": false, 
+    "bold": true, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "Arial-BoldMT", 
+    "family": "Arial", 
+    "weight": 7, 
+    "underlined": false, 
+    "face": "Vet"
+   }, 
+   "all_bold": true, 
+   "rich": "{\\rtf1\\deff0{\\fonttbl{\\f0 Arial;}}\\f0 \\fs23{\\f0\\b Arial bold}}"
+  }, 
+  {
+   "plain": "Times italic", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Times New Roman", 
+    "logfont": "Times New Roman", 
+    "style": 1, 
+    "postscript": "TimesNewRomanPSMT", 
+    "family": "Times New Roman", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_italic": true, 
+   "style": "413e2378-1ede-2ada-a2ed-13df4dea8f47", 
+   "name": "Times italic", 
+   "id": "e91c0e28-ffcd-4f6f-b368-5d93e6a334e4", 
+   "first_char_font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": true, 
+    "quartet": "Times New Roman", 
+    "logfont": "Times New Roman", 
+    "style": 2, 
+    "postscript": "TimesNewRomanPS-ItalicMT", 
+    "family": "Times New Roman", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Cursief"
+   }, 
+   "all_bold": false, 
+   "rich": "{\\rtf1\\deff0{\\fonttbl{\\f0 Arial;}{\\f1 Times New Roman;}}\\f0 \\fs23{\\f1\\i Times italic}}"
+  }, 
+  {
+   "plain": "Courier style", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_italic": false, 
+   "style": "52d81195-2155-4e6a-a60d-494d85d3094e", 
+   "name": "Courier style", 
+   "id": "4b4485e7-8b22-4bb0-ae39-29413754ba49", 
+   "first_char_font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Courier New", 
+    "logfont": "Courier New", 
+    "style": 1, 
+    "postscript": "CourierNewPSMT", 
+    "family": "Courier New", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_bold": false, 
+   "rich": "{\\rtf1\\deff0{\\fonttbl{\\f0 Courier New;}}\\f0 \\fs23{\\f0 Courier style}}"
+  }, 
+  {
+   "plain": "Default style", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_italic": false, 
+   "style": "413e2378-1ede-2ada-a2ed-13df4dea8f47", 
+   "name": "Default style", 
+   "id": "df719729-4683-4f4c-8438-5fc52337efb8", 
+   "first_char_font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_bold": false, 
+   "rich": "{\\rtf1\\deff0{\\fonttbl{\\f0 Arial;}}\\f0 \\fs23{\\f0 Default style}}"
+  }, 
+  {
+   "plain": "<>", 
+   "font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": false, 
+    "quartet": "Arial", 
+    "logfont": "Arial", 
+    "style": 1, 
+    "postscript": "ArialMT", 
+    "family": "Arial", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Standaard"
+   }, 
+   "all_italic": true, 
+   "style": "bbd6de85-25ac-45da-afb9-f2ddec68006a", 
+   "name": "Times dimension", 
+   "id": "37da13ad-d332-48c4-aaf1-5dd92f7fdd27", 
+   "first_char_font": {
+    "strikeout": false, 
+    "bold": false, 
+    "italic": true, 
+    "quartet": "Times New Roman", 
+    "logfont": "Times New Roman", 
+    "style": 2, 
+    "postscript": "TimesNewRomanPS-ItalicMT", 
+    "family": "Times New Roman", 
+    "weight": 4, 
+    "underlined": false, 
+    "face": "Cursief"
+   }, 
+   "all_bold": false, 
+   "rich": "{\\rtf1\\deff0{\\fonttbl{\\f0 Times New Roman;}}\\f0 \\fs23\\i{\\f0\\i 10.00}}"
+  }
+ ], 
+ "render": {
+  "use_hidden_lights": false, 
+  "antialias": 1, 
+  "render_mesh_edges": false, 
+  "background_bottom": [
+   160, 
+   160, 
+   160, 
+   0
+  ], 
+  "image_dpi": 72.0, 
+  "background_style": 0, 
+  "render_curves": false, 
+  "ambient": [
+   0, 
+   0, 
+   0, 
+   0
+  ], 
+  "render_isoparams": false, 
+  "named_view": null, 
+  "render_source": 0, 
+  "depth_cue": false, 
+  "flat_shade": false, 
+  "render_backfaces": true, 
+  "image_size": [
+   800, 
+   600
+  ], 
+  "specific_viewport": null, 
+  "background_top": [
+   255, 
+   255, 
+   255, 
+   0
+  ], 
+  "use_viewport_size": true, 
+  "transparent_background": false, 
+  "shadowmap_level": 1, 
+  "render_points": false, 
+  "render_annotations": false, 
+  "snapshot": null, 
+  "image_unit": 8, 
+  "scale_background": false
+ }, 
+ "grid": {
+  "grid_line_count": 70, 
+  "thick_frequency": 5, 
+  "show_grid": true, 
+  "show_world_axes": true, 
+  "grid_spacing": 1.0, 
+  "snap_spacing": 1.0, 
+  "show_axes": true
+ }
+}

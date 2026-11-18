@@ -67,7 +67,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     Err(_) => Geometry::Skipped("Rhino 1 meshes that could not be read"),
                 };
                 let (attributes, _) = read_attributes(&mut body, None);
-                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None });
+                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None, font: None });
             }
             TCODE_RH_POINT => {
                 // a point, or by its extra data an arrow (a curve, as Rhino 9 converts it) or
@@ -88,7 +88,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     (Ok(points), None) => Geometry::Points { points, colors: None, kind: "Point" },
                     (Err(_), _) => Geometry::Skipped("Rhino 1 points that could not be read"),
                 };
-                file.objects.push(RhinoObject { geometry, attributes, user, stroke: None });
+                file.objects.push(RhinoObject { geometry, attributes, user, stroke: None, font: None });
             }
             TCODE_LEGACY_CRV => {
                 // its attributes, then the curve
@@ -97,7 +97,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     Some(Ok(points)) => Geometry::Lines(vec![points], "Curve"),
                     _ => Geometry::Skipped("Rhino 1 curves that could not be read"),
                 };
-                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None });
+                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None, font: None });
             }
             TCODE_LEGACY_FAC | TCODE_LEGACY_SHL => {
                 // its attributes, then the face or the faces of the shell, meshed
@@ -116,7 +116,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     },
                     Err(_) => Geometry::Skipped("Rhino 1 surfaces that could not be read"),
                 };
-                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None });
+                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None, font: None });
             }
             _ => {}
         }
