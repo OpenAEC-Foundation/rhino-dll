@@ -28,12 +28,15 @@ pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, Clip
 mod dimensions;
 mod document;
 pub mod drafting;
+mod fonts;
 mod lights;
+mod settings;
 pub mod subd;
 pub mod tessellate;
 mod v1;
 
 pub use document::Document;
+pub use threedm_model::{ConstructionPlane, DimensionStyle, EarthAnchor, Font, GridDefaults, HistoryData, HistoryRecord, LayerState, MeshSettings, PlugIn, RenderSettings, Settings, Snapshot, UserTable};
 pub use threedm_core::{Uuid, Versions, R};
 
 const MAGIC: &[u8] = b"3D Geometry File Format ";
@@ -81,6 +84,8 @@ struct Drafting {
     meters: f64,
     /// The document's annotation settings (Rhino 2 and 3), for annotations without a style.
     document_style: Option<drafting::DimStyle>,
+    /// The font table of Rhino 4 and 5, by index.
+    fonts: Vec<(i32, threedm_model::Font)>,
 }
 
 /// Reads a Rhino file: its tables, and its objects as meshes, polylines, points and block
@@ -92,7 +97,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     let version: u32 = std::str::from_utf8(&header[24..32]).ok().and_then(|s| s.trim().parse().ok()).ok_or("Rhino 3dm: the header has no version")?;
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
-    let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001, document_style: None }, vertices: 0 };
+    let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001, document_style: None, fonts: Vec::new() }, vertices: 0 };
     if version < 2 {
         // Rhino 1: top-level chunks of its own
         v1::read(top, &mut r.file, &mut r.vertices)?;
@@ -167,6 +172,25 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 }
                 Ok(())
             }),
+            fonts::TCODE_FONT_TABLE => table(body, fonts::TCODE_FONT_RECORD, &mut r, "fonts", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == fonts::ON_TEXT_STYLE) {
+                    f.drafting.fonts.push(fonts::read_v5_font(object.data)?);
+                }
+                Ok(())
+            }),
+            settings::TCODE_HISTORYRECORD_TABLE => table(body, settings::TCODE_HISTORYRECORD_RECORD, &mut r, "history records", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == settings::ON_HISTORY_RECORD) {
+                    f.file.history.push(settings::read_history_record(object.data)?);
+                }
+                Ok(())
+            }),
+            settings::TCODE_USER_TABLE => match settings::read_user_table(body) {
+                Ok(t) => {
+                    settings::read_known_table(&t, r.file.versions, &mut r.file);
+                    r.file.user_tables.push(t);
+                }
+                Err(_) => *r.file.damaged.entry("user tables").or_default() += 1,
+            },
             TCODE_LIGHT_TABLE => table(body, TCODE_LIGHT_RECORD, &mut r, "lights", |c, f| {
                 if f.file.lights.len() < MAX_LIGHTS {
                     f.file.lights.extend(lights::read_light_record(c)?);
@@ -189,7 +213,26 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
             _ => {}
         }
     }
+    finish(&mut r);
     Ok(r.file)
+}
+
+/// What is known once all is read: the dimension styles with their fonts, the font table, the
+/// names of the plug-ins that saved tables.
+fn finish(r: &mut Reader<'_>) {
+    let fonts = &r.drafting.fonts;
+    r.file.dim_styles = r
+        .drafting
+        .dim_styles
+        .iter()
+        .map(|d| threedm_model::DimensionStyle { id: d.id, index: d.index, name: d.name.clone(), font: d.font.clone().or_else(|| fonts.iter().find(|(i, _)| *i == d.text_style).map(|(_, f)| f.clone())) })
+        .collect();
+    r.file.fonts = fonts.clone();
+    for t in &mut r.file.user_tables {
+        if let Some(p) = r.file.settings.plugins.iter().find(|p| p.id == t.plugin) {
+            t.name = p.name.clone();
+        }
+    }
 }
 
 /// The records of a table, up to its end; a damaged record is counted and skipped.
@@ -262,21 +305,23 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
                 }
             }
             TCODE_SETTINGS_ATTRIBUTES => {
-                if let Ok(Some((meters, unit))) = read_page_units(chunk.body) {
+                if let Ok(Some((meters, unit))) = read_page_units(chunk.body.clone()) {
                     (file.page_meters, file.page_unit) = (meters, unit);
                 }
+                settings::read_chunk(&chunk, &mut file.settings);
             }
             TCODE_SETTINGS_VIEW_LIST => {
-                if let Ok(views) = read_views(chunk.body) {
+                if let Ok(views) = read_views(chunk.body.clone()) {
                     file.views = views;
                 }
+                settings::read_chunk(&chunk, &mut file.settings);
             }
             TCODE_SETTINGS_NAMED_VIEW_LIST => {
                 if let Ok(views) = read_views(chunk.body) {
                     file.named_views = views;
                 }
             }
-            _ => {}
+            _ => settings::read_chunk(&chunk, &mut file.settings),
         }
     }
 }
@@ -787,6 +832,7 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
             _ => {}
         }
     }
+    let font = object.as_ref().and_then(|o| fonts::object_font(o.class, o.data.clone(), &drafting.dim_styles, &drafting.fonts));
     let geometry = match object {
         Some(object) => {
             user.extend(user_strings_of(&object.userdata));
@@ -807,7 +853,7 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
         }
         None => Geometry::Skipped("empty objects"),
     };
-    Ok(RhinoObject { geometry, attributes, user })
+    Ok(RhinoObject { geometry, attributes, user, font })
 }
 
 /// `ON_3dmObjectAttributes`: the item list of Rhino 5 and later, or the fixed layout before.
@@ -1680,7 +1726,7 @@ mod tests {
         let mut c = Cur { data: &bytes, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
         let object = c.object().unwrap().unwrap();
         assert_eq!(text_dot_text(object.data.clone()).unwrap(), [("Text".to_string(), "A1".to_string()), ("Secondary text".to_string(), "Grid A, 1".to_string())]);
-        let drafting = Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001, document_style: None };
+        let drafting = Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001, document_style: None, fonts: Vec::new() };
         let Geometry::Points { points, kind, .. } = read_geometry(object, 0x2000, &mut 0, &drafting).unwrap() else { panic!("not a point") };
         assert_eq!((points, kind), (&f64s(&[1.0, 2.0, 3.0])[..], "Text dot"));
     }

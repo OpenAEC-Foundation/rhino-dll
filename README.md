@@ -20,6 +20,14 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
   and text). Clipping planes come with their rectangle, plane, depth, the objects they clip
   (selective clipping) and the viewports they clip, and the file's views with them.
+- The document settings: the earth anchor point (latitude, longitude, elevation, model point,
+  north and east) and the model base point, for georeferencing; named and view construction
+  planes, render, analysis and custom mesh settings, grid defaults, render settings, the current
+  layer, material, linetype, styles and colour, the model URL and the plug-in list. Also the
+  history records (command, the objects they link, their values), the document user text, the
+  named layer states and snapshots, and every plug-in's table as stored; the font of each text,
+  dimension and leader (of its first character) and of each dimension style, and the font table
+  of Rhino 4 and 5 files. Texts are still set in the one font they are given.
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
   layers) is up to the program that uses it; Open BIM Suite's Rhino loader is an example.
@@ -67,8 +75,9 @@ threedm_free(info);
 threedm_close(doc);
 ```
 
-Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`) and
-`object` (by `id`, with its geometry); see `crates/threedm-ffi/src/lib.rs`.
+Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`),
+`object` (by `id`, with its geometry), `settings` and `history`; see
+`crates/threedm-ffi/src/lib.rs`.
 
 From the command line:
 

@@ -7,6 +7,9 @@ use glam::{DMat4, DVec3};
 use std::collections::BTreeMap;
 pub use threedm_core::{Uuid, Versions};
 
+mod settings;
+pub use settings::*;
+
 /// A layer (`ON_Layer`); its full path follows the parents by id.
 #[derive(Debug, Clone)]
 pub struct Layer {
@@ -361,6 +364,8 @@ pub struct Object<'a> {
     pub geometry: Geometry<'a>,
     pub attributes: Attributes,
     pub user: Vec<(String, String)>,
+    /// The font of a text, dimension or leader: of its first character as Rhino gives it.
+    pub font: Option<Font>,
 }
 
 /// A Rhino file as read.
@@ -389,6 +394,22 @@ pub struct File<'a> {
     pub groups: Vec<(i32, String)>,
     /// The lights of the light table (and of the object table, where old files keep them).
     pub lights: Vec<Light>,
+    /// The document settings: earth anchor, construction planes, mesh, grid and render
+    /// settings, the current table entries, the plug-ins.
+    pub settings: Settings,
+    /// The dimension styles with their fonts.
+    pub dim_styles: Vec<DimensionStyle>,
+    /// The font table of Rhino 4 and 5 files (`ON_TextStyle`), by index.
+    pub fonts: Vec<(i32, Font)>,
+    /// The history records (`ON_HistoryRecord`).
+    pub history: Vec<HistoryRecord>,
+    /// The tables plug-ins saved, as stored; those read below are among them.
+    pub user_tables: Vec<UserTable<'a>>,
+    /// The document's user text (Rhino's `SetDocumentUserText`), key and value.
+    pub document_user_text: Vec<(String, String)>,
+    /// The named layer states, and the snapshots.
+    pub layer_states: Vec<LayerState>,
+    pub snapshots: Vec<Snapshot>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
 }

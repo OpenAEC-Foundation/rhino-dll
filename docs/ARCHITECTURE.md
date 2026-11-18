@@ -29,12 +29,17 @@ sources, visibility, mode and space), its user text and its `Geometry`: `Meshes`
 object type to show), `Lines` (polylines), `Points` (borrowed from the file, read when used),
 `Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions
 and leaders), `ClippingPlane` or `Skipped` (with the reason). `File.views` are the viewports of
-its views, the active one first.
+its views, the active one first. A text, dimension or leader has its `Font` (of its first
+character). `File.settings` holds the document settings (`Settings`: earth anchor point, model
+base point and URL, construction planes, mesh, grid and render settings, current entries,
+plug-ins); beside it the dimension styles with their fonts, the font table, the history
+records, the plug-in tables as stored, the document user text, layer states and snapshots.
 
 ## threedm-read: from tables to geometry
 
 `read` walks the tables (properties, settings, materials, layers, block definitions, dimension
-styles, hatch patterns, objects); a damaged record is counted and skipped. Objects:
+styles, fonts, hatch patterns, objects, history records, user tables); a damaged record is
+counted and skipped. Objects:
 
 - meshes as stored (`ON_Mesh`, compressed or not);
 - polysurfaces, surfaces and extrusions by the render meshes Rhino keeps with them, else by a
@@ -63,6 +68,24 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   the objects and layers they clip (Rhino 8's selective clipping), and the viewports of the
   file's views (`TCODE_SETTINGS_VIEW_LIST`: id, name, perspective; the active one first) to match
   them with.
+
+Beside the objects:
+
+- the settings (`settings`): every chunk `ON_3dmSettings::Read` handles besides the units,
+  views and annotation settings: the plug-in list, render and analysis mesh settings, named
+  construction planes (and those of the view list's views, by viewport id), the current
+  layer, material, colour and wire density, render settings (Rhino 5's layout and Rhino 6's),
+  grid defaults, the model URL and the settings attributes (linetype scale, current plot colour
+  and linetype, active view, model base point, earth anchor point, IO settings, custom render
+  mesh settings, current entries by id); the history record table (`ON_HistoryRecord` and its
+  `ON_Value`s; geometry values kept as bytes); the user tables (`TCODE_USER_TABLE`) as stored,
+  and of them the document user text (`ON_DocumentUserStringList`), the named layer states
+  (Rhino Bonus Tools' table: each state's layers as `ON_Layer`) and the snapshots (the
+  Snapshots plug-in's XML, by name);
+- fonts (`fonts`): `ON_Font` of the dimension styles, the font table of Rhino 4 and 5
+  (`ON_TextStyle`), and the font of a text, dimension or leader: its rich text's font table and
+  the `\f`, `\b` and `\i` in force at its first character, else its own style's or its
+  dimension style's font.
 
 Limits: at most `MAX_VERTICES` mesh vertices are read from a file and at most 120 000 SubD faces
 are made per object; what goes beyond is left out with the reason.

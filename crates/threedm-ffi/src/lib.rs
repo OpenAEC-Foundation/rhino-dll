@@ -24,9 +24,19 @@
 //!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance,
 //!   or of a layout's detail its `boundary` on the page, the model `view` it shows, its `scale`
 //!   (page per model length) and whether it is `locked`; objects on a layout have `space` 2 and
-//!   the layout's id as `viewport`.
+//!   the layout's id as `viewport`; a text, dimension or leader has its `font` (family, face,
+//!   weight, bold, italic: of its first character);
+//! - `{"query": "settings"}`: the document settings: earth anchor point, model base point and
+//!   URL, named and view construction planes, render, analysis and custom mesh settings, grid
+//!   defaults, render settings, the current table entries, the plug-ins; the document user
+//!   text, named layer states, snapshots, dimension styles with their fonts, the font table and
+//!   the plug-in tables (by plug-in, with their size);
+//! - `{"query": "history"}`: the history records: command, version, the objects they were made
+//!   from and made, their values by id and type.
 
 use std::ffi::{c_char, CStr, CString};
+
+mod settings;
 
 use serde_json::{json, Value};
 use threedm_read::{Document, File, Geometry, Light, LightKind, Material, Mesh, RhinoObject};
@@ -78,6 +88,7 @@ fn object_summary(o: &RhinoObject<'_>) -> Value {
         "linetype_scale": a.linetype_scale,
         "custom_linetype": a.custom_linetype,
         "hatch_background": a.hatch_background,
+        "font": o.font.as_ref().map(settings::font_json),
         "hatch_boundary": a.hatch_boundary,
         "user_text": user,
     })
@@ -217,6 +228,10 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "layouts": file.views.iter().filter(|v| v.page.is_some()).map(view_json).collect::<Vec<_>>(),
                 "groups": file.groups.iter().map(|(i, n)| json!({"index": i, "name": n})).collect::<Vec<_>>(),
                 "kinds": kinds,
+                "earth_anchor": file.settings.earth_anchor.as_ref().map(|e| json!({"latitude": e.latitude, "longitude": e.longitude, "elevation": e.elevation, "name": e.name})),
+                "model_basepoint": file.settings.model_basepoint.to_array(),
+                "dim_styles": settings::dim_styles_json(file),
+                "history_records": file.history.len(),
                 "damaged": file.damaged,
             }))
         }
@@ -233,6 +248,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             .map(|b| json!({"id": b.id.to_string(), "name": b.name, "objects": b.objects.iter().map(|o| o.to_string()).collect::<Vec<_>>()}))
             .collect()),
         "lights" => Ok(file.lights.iter().map(light_json).collect()),
+        "settings" => Ok(settings::settings_json(file)),
+        "history" => Ok(file.history.iter().map(settings::history_json).collect()),
         "objects" => {
             let limit = req.get("limit").and_then(Value::as_u64).map_or(usize::MAX, |n| n as usize);
             let offset = req.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -246,7 +263,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             v["geometry"] = geometry_json(&o.geometry);
             Ok(v)
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object)")),
+        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object, settings, history)")),
     }
 }
 

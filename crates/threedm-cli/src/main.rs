@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! threedm info <file.3dm>                  the version, units, tables and objects by kind
-//! threedm layers|materials|blocks|lights <file>
+//! threedm layers|materials|blocks|lights|settings|history <file>
 //!                                          a table
 //! threedm objects <file> [limit] [offset]  objects with their attributes and user text
 //! threedm object <file> <id>               one object with its geometry
@@ -14,7 +14,7 @@
 use std::process::ExitCode;
 
 fn usage() -> ExitCode {
-    eprintln!("usage: threedm info|layers|materials|blocks|lights <file.3dm>\n       threedm objects <file.3dm> [limit] [offset]\n       threedm object <file.3dm> <id>\n       threedm query <file.3dm> <json request>");
+    eprintln!("usage: threedm info|layers|materials|blocks|lights|settings|history <file.3dm>\n       threedm objects <file.3dm> [limit] [offset]\n       threedm object <file.3dm> <id>\n       threedm query <file.3dm> <json request>");
     ExitCode::from(2)
 }
 
@@ -22,7 +22,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (Some(command), Some(path)) = (args.first(), args.get(1)) else { return usage() };
     let request = match command.as_str() {
-        "info" | "layers" | "materials" | "blocks" | "lights" => serde_json::json!({ "query": command }),
+        "info" | "layers" | "materials" | "blocks" | "lights" | "settings" | "history" => serde_json::json!({ "query": command }),
         "objects" => {
             let number = |i: usize| args.get(i).and_then(|s| s.parse::<u64>().ok());
             let mut r = serde_json::json!({"query": "objects"});
