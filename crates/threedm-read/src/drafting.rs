@@ -42,8 +42,21 @@ pub(super) struct PatternLine {
 #[derive(Debug, Clone)]
 pub(super) struct HatchPattern {
     pub(super) index: i32,
+    pub(super) name: String,
     pub(super) solid: bool,
     lines: Vec<PatternLine>,
+}
+
+impl HatchPattern {
+    /// As the model gives it (`File::hatch_patterns`).
+    pub(super) fn public(&self) -> threedm_model::HatchPattern {
+        threedm_model::HatchPattern {
+            index: self.index,
+            name: self.name.clone(),
+            solid: self.solid,
+            lines: self.lines.iter().map(|l| threedm_model::HatchLine { angle: l.angle, base: l.base.to_array(), offset: l.offset.to_array(), dashes: l.dashes.clone() }).collect(),
+        }
+    }
 }
 
 /// A hatch: its plane (origin, x and y axes), pattern, scale and turn, and its loops (outer
@@ -72,7 +85,7 @@ fn read_line(c: &mut Cur<'_>) -> R<PatternLine> {
 /// table, the index Rhino 6 and later refer to it by.
 pub(super) fn read_pattern(mut c: Cur<'_>, position: i32) -> R<HatchPattern> {
     let v5 = c.v.archive < 60 || (c.v.archive == 60 && c.v.opennurbs < 2_348_833_956);
-    let mut pattern = HatchPattern { index: position, solid: true, lines: Vec::new() };
+    let mut pattern = HatchPattern { index: position, name: String::new(), solid: true, lines: Vec::new() };
     if v5 {
         let (major, _) = c.version()?;
         if major != 1 {
@@ -80,7 +93,7 @@ pub(super) fn read_pattern(mut c: Cur<'_>, position: i32) -> R<HatchPattern> {
         }
         pattern.index = c.i32()?;
         let fill = c.u32()?;
-        c.wstring()?; // name
+        pattern.name = c.wstring()?;
         c.wstring()?; // description
         pattern.solid = fill != 1;
         if fill == 1 {
@@ -96,7 +109,8 @@ pub(super) fn read_pattern(mut c: Cur<'_>, position: i32) -> R<HatchPattern> {
     if major != 1 {
         return err("a hatch pattern of an unknown version");
     }
-    b.chunk()?; // model component attributes
+    // its name (hatches refer to it by its place in the table)
+    pattern.name = super::styles::component(&mut b)?.2;
     let fill = b.u32()?;
     b.wstring()?; // description
     pattern.solid = fill != 1;
@@ -1057,14 +1071,14 @@ mod tests {
     #[test]
     fn hatch_lines_are_cut_to_the_loops_and_dashed() {
         // horizontal lines one apart over a 10 by 10 square with a hole of 2 by 2
-        let pattern = HatchPattern { index: 0, solid: false, lines: vec![PatternLine { angle: 0.0, base: DVec2::new(0.0, 0.5), offset: DVec2::new(0.0, 1.0), dashes: Vec::new() }] };
+        let pattern = HatchPattern { index: 0, name: String::new(), solid: false, lines: vec![PatternLine { angle: 0.0, base: DVec2::new(0.0, 0.5), offset: DVec2::new(0.0, 1.0), dashes: Vec::new() }] };
         let h = hatch(vec![square(true, 0.0, 10.0), square(false, 4.0, 6.0)]);
         let lines = h.lines(&pattern);
         let total: f64 = lines.iter().map(|l| (l[1] - l[0]).length()).sum();
         // ten lines of 10, less two crossings of the hole of 2
         assert!((total - 96.0).abs() < 1e-9, "{total}");
         // dashed: 1 drawn, 1 gap
-        let dashed = HatchPattern { index: 0, solid: false, lines: vec![PatternLine { angle: 0.0, base: DVec2::new(0.0, 0.5), offset: DVec2::new(0.0, 1.0), dashes: vec![1.0, -1.0] }] };
+        let dashed = HatchPattern { index: 0, name: String::new(), solid: false, lines: vec![PatternLine { angle: 0.0, base: DVec2::new(0.0, 0.5), offset: DVec2::new(0.0, 1.0), dashes: vec![1.0, -1.0] }] };
         let total: f64 = hatch(vec![square(true, 0.0, 10.0)]).lines(&dashed).iter().map(|l| (l[1] - l[0]).length()).sum();
         assert!((total - 50.0).abs() < 1e-9, "{total}");
     }

@@ -935,6 +935,16 @@ fn rhino8_drafting_is_read_as_in_rhino() {
     assert_eq!(boundary.len(), 1);
     assert!((boundary[0] - 80.0).abs() < 1e-9, "{boundary:?}");
     assert!(lines.len() > 5, "the pattern's lines too");
+
+    // the hatch pattern table, by name and index, with the families of lines
+    for r in reference["hatch_patterns"].as_array().unwrap() {
+        let name = r["name"].as_str().unwrap();
+        let p = file.hatch_patterns.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(p.index as i64, int(&r["index"]), "{name}");
+        assert_eq!(p.solid, r["fill"] == "Solid", "{name}");
+        assert!(!p.lines.is_empty() && p.lines.iter().all(|l| l.offset[1] != 0.0), "{name}: {:?}", p.lines);
+    }
+    assert_eq!(file.hatch_patterns.iter().find(|p| p.name == "Grid").unwrap().lines.len(), 2);
 }
 
 /// The document settings (`settings.3dm`, from make_settings.py) as Rhino 9 reads them

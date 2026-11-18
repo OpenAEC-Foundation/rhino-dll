@@ -26,7 +26,7 @@
 use glam::DVec3;
 use lights::{MAX_LIGHTS, TCODE_LIGHT_RECORD, TCODE_LIGHT_TABLE};
 use threedm_core::*;
-pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, LineCap, LineJoin, Linetype, Material, Mesh, Object as RhinoObject, Page, Pbr, SectionStyle, Stroke, Texture, View};
+pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, HatchLine, HatchPattern, Layer as RhinoLayer, Light, LightKind, LineCap, LineJoin, Linetype, Material, Mesh, Object as RhinoObject, Page, Pbr, SectionStyle, Stroke, Texture, View};
 pub use threedm_model::{Decoded, Dictionary, Entry, MorphControl, NurbsCage, Owner, PlugInData, PolyEdgeSegment, Value};
 
 mod dimensions;
@@ -213,7 +213,9 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
             TCODE_HATCHPATTERN_TABLE => table(body, TCODE_HATCHPATTERN_RECORD, &mut r, "hatch patterns", |mut c, f| {
                 let position = f.drafting.patterns.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_HATCH_PATTERN) {
-                    f.drafting.patterns.push(drafting::read_pattern(object.data, position)?);
+                    let pattern = drafting::read_pattern(object.data, position)?;
+                    f.file.hatch_patterns.push(pattern.public());
+                    f.drafting.patterns.push(pattern);
                 }
                 Ok(())
             }),
@@ -1061,10 +1063,10 @@ pub(crate) fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
                     c.u8()?; // obsolete line cap and join, clip participation source
                 }
                 28 => {
-                    c.bool()?; // clipping proof
+                    a.clipping_proof = c.bool()?;
                     let (mut list, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
                     let n = list.count(16)?;
-                    list.take(16 * n)?; // the clipping planes that clip it
+                    a.clipped_by = (0..n).map(|_| list.uuid()).collect::<R<Vec<_>>>()?;
                 }
                 29 => a.section_source = c.u8()?,
                 // section attributes before the section style (39): into the object's own

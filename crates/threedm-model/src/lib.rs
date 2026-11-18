@@ -168,6 +168,28 @@ impl Default for SectionStyle {
     }
 }
 
+/// A hatch pattern (`ON_HatchPattern`) of the hatch pattern table: filled (solid), or families
+/// of parallel lines.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HatchPattern {
+    /// The index hatches and section styles refer to.
+    pub index: i32,
+    pub name: String,
+    pub solid: bool,
+    pub lines: Vec<HatchLine>,
+}
+
+/// A family of parallel lines of a hatch pattern (`ON_HatchLine`): at `angle` (radians), the
+/// first through `base`, each next one `offset` further (along and across the lines), dashed by
+/// `dashes` (positive drawn, negative a gap; none: continuous). Pattern units.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HatchLine {
+    pub angle: f64,
+    pub base: [f64; 2],
+    pub offset: [f64; 2],
+    pub dashes: Vec<f64>,
+}
+
 /// A material (`ON_Material`): its colours, shine, reflectivity, index of refraction and
 /// transparency, its textures, and its physically based parameters when it has them.
 #[derive(Debug, Clone, Default)]
@@ -320,6 +342,10 @@ pub struct Attributes {
     pub custom_section_style: Option<SectionStyle>,
     /// A clipping plane's label: 0 none, 1 a text dot of its name, 2 a text of its name.
     pub clipping_label: u8,
+    /// Not clipped by any clipping plane (Rhino 8).
+    pub clipping_proof: bool,
+    /// When not empty: clipped only by these clipping planes (their object ids).
+    pub clipped_by: Vec<Uuid>,
     /// Its decals.
     pub decals: Vec<Decal>,
     /// Its mesh modifiers (only read: its meshes are as stored).
@@ -358,6 +384,8 @@ impl Default for Attributes {
             section_style: -1,
             custom_section_style: None,
             clipping_label: 0,
+            clipping_proof: false,
+            clipped_by: Vec::new(),
             decals: Vec::new(),
             mesh_modifiers: MeshModifiers::default(),
         }
@@ -557,6 +585,8 @@ pub struct File<'a> {
     pub linetypes: Vec<Linetype>,
     /// The section style table (Rhino 9).
     pub section_styles: Vec<SectionStyle>,
+    /// The hatch pattern table.
+    pub hatch_patterns: Vec<HatchPattern>,
     pub materials: Vec<Material>,
     /// The bitmap table: images embedded in the file.
     pub bitmaps: Vec<Bitmap>,
