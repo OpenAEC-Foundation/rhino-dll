@@ -78,8 +78,14 @@ impl W {
     }
 
     pub fn user_data(&self, class: Uuid, data: &[u8]) -> Vec<u8> {
-        let header = self.chunk(TCODE_OPENNURBS_CLASS_USERDATA_HEADER, &cat(&[&class.0, &[0; 16], &i32b(1), &f64s(&DMat4::IDENTITY.to_cols_array())]));
-        self.chunk(TCODE_OPENNURBS_CLASS_USERDATA, &cat(&[&[0x20], &header, &self.chunk(TCODE_ANONYMOUS_CHUNK, data)]))
+        // header 2.2, as Rhino 5 and later write it: class, item, copy count, transform, plug-in,
+        // goo, and the archive and openNURBS versions the data is written with
+        let archive = if self.big { 70 } else { 4 };
+        let header = self.chunk(
+            TCODE_OPENNURBS_CLASS_USERDATA_HEADER,
+            &cat(&[&class.0, &[0; 16], &i32b(1), &f64s(&DMat4::IDENTITY.to_cols_array()), &[0; 16], &[0], &i32b(archive), &i32b(0)]),
+        );
+        self.chunk(TCODE_OPENNURBS_CLASS_USERDATA, &cat(&[&[0x22], &header, &self.chunk(TCODE_ANONYMOUS_CHUNK, data)]))
     }
 
     pub fn user_strings(&self, pairs: &[(&str, &str)]) -> Vec<u8> {
