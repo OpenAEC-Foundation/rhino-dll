@@ -391,4 +391,195 @@ pub struct File<'a> {
     pub lights: Vec<Light>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
+    /// The user data of objects and table records, every entry as stored.
+    pub plugin_data: Vec<PlugInData<'a>>,
+    /// The document's user tables (plug-in document data), as stored.
+    pub user_tables: Vec<UserTable<'a>>,
+    /// The document's user text (`ON_DocumentUserStringList`, Rhino's `doc.Strings`).
+    pub document_user_text: Vec<(String, String)>,
+    /// The plug-ins the file names (`TCODE_SETTINGS_PLUGINLIST`).
+    pub plugins: Vec<PlugIn>,
+    /// The NURBS volumes of cage objects (`ON_NurbsCage`), by their object's place in
+    /// [`File::objects`].
+    pub cages: Vec<(usize, NurbsCage)>,
+    /// The morph controls (`ON_MorphControl`).
+    pub morph_controls: Vec<MorphControl>,
+    /// The segments of curves along polysurface edges (`ON_PolyEdgeCurve`), by their object's
+    /// place in [`File::objects`].
+    pub poly_edges: Vec<(usize, Vec<PolyEdgeSegment>)>,
+}
+
+/// Who a piece of plug-in data belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    /// An object, by its place in [`File::objects`]: the data of its geometry, or (`attributes`)
+    /// of its attributes.
+    Object { index: usize, attributes: bool },
+    /// A record of a table ("layers", "materials", ..), by its place in the table.
+    Table { table: &'static str, index: usize },
+}
+
+/// A user data entry (`ON_UserData`) as stored, with what is known of it: the plug-in that
+/// wrote it (named when the file's plug-in list names it) and, when its form is known, its
+/// content ([`Decoded`]).
+#[derive(Debug, Clone)]
+pub struct PlugInData<'a> {
+    pub owner: Owner,
+    /// The user data class.
+    pub class: Uuid,
+    /// The plug-in (`m_application_uuid`); nil in old files.
+    pub plugin: Uuid,
+    pub plugin_name: String,
+    /// `m_userdata_uuid`: which item of the plug-in's data.
+    pub item: Uuid,
+    /// The version of the entry (header 1.0 to 2.2).
+    pub version: (u8, u8),
+    pub copy_count: i32,
+    /// The transforms applied to the owner since the data was attached, for column vectors.
+    pub xform: DMat4,
+    /// Saved by a program that did not know its class (`ON_UnknownUserData`).
+    pub goo: bool,
+    /// The archive and openNURBS versions it was written with (0 when the file does not say).
+    pub archive: i32,
+    pub opennurbs: u32,
+    /// The bytes as stored (the content of its anonymous chunk).
+    pub bytes: &'a [u8],
+    pub decoded: Option<Decoded>,
+}
+
+/// A user table of the document (`TCODE_USER_TABLE`): a plug-in's document data, as stored.
+#[derive(Debug, Clone)]
+pub struct UserTable<'a> {
+    pub plugin: Uuid,
+    pub plugin_name: String,
+    /// Saved by a program that did not know the plug-in, and the versions it was written with
+    /// (0 when the file does not say).
+    pub goo: bool,
+    pub archive: i32,
+    pub opennurbs: u32,
+    /// The content of its `TCODE_USER_RECORD` chunk.
+    pub bytes: &'a [u8],
+    pub decoded: Option<Decoded>,
+}
+
+/// A plug-in of the file's plug-in list (`ON_PlugInRef`): the plug-ins that may have saved data
+/// in it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlugIn {
+    pub id: Uuid,
+    pub name: String,
+    pub version: String,
+    pub file: String,
+    /// `ON::plugin_type`: 1 render, 2 file import, 3 file export, 4 digitizer, 5 utility,
+    /// 6 display pipeline, 7 display engine.
+    pub kind: i32,
+    pub organization: String,
+    pub website: String,
+    pub email: String,
+}
+
+/// The content of plug-in data whose form is known.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Decoded {
+    /// `ON_UserStringList` (user text) or the document's user text.
+    UserText(Vec<(String, String)>),
+    /// An archivable dictionary (RhinoCommon's `UserDictionary`, `ON_ArchivableDictionary`).
+    Dictionary(Dictionary),
+    /// Text the data holds whole: XML or JSON (UTF-8 or UTF-16).
+    Text(String),
+}
+
+/// An archivable dictionary (`ON_ArchivableDictionary`, RhinoCommon's `ArchivableDictionary`):
+/// its id, version and name, and its entries in the order stored.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Dictionary {
+    pub id: Uuid,
+    pub version: u32,
+    pub name: String,
+    pub entries: Vec<Entry>,
+}
+
+/// An entry of a dictionary: its key, its type as stored and its value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub key: String,
+    /// The item type as stored (`DictionaryEntryType`: 1 bool, 6 int, 10 double, 12 string, ..).
+    pub kind: i32,
+    pub value: Value,
+}
+
+/// A value of a dictionary entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Bool(bool),
+    /// Every integer type (8 to 64 bits, signed or not).
+    Int(i64),
+    /// Float and double.
+    Number(f64),
+    Uuid(Uuid),
+    String(String),
+    /// Red, green, blue and alpha (0 opaque), as `ON_Color` stores it.
+    Color([u8; 4]),
+    /// Points, vectors, intervals, rectangles, sizes, boxes, rays, planes, lines and
+    /// transforms: their numbers in the order stored (see [`Entry::kind`]).
+    Numbers(Vec<f64>),
+    /// Arrays of bools, integers, floats, doubles, uuids and strings.
+    Array(Vec<Value>),
+    Dictionary(Box<Dictionary>),
+    /// An openNURBS object (geometry, mesh parameters): its class and data length.
+    Object { class: Uuid, bytes: usize },
+    /// A type the reader does not know, or could not read: the bytes as stored.
+    Raw(Vec<u8>),
+}
+
+/// A NURBS volume (`ON_NurbsCage`), or a NURBS curve or surface as one with a single control
+/// point in the directions it lacks.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct NurbsCage {
+    /// Order and control point count in each of the three directions.
+    pub order: [usize; 3],
+    pub count: [usize; 3],
+    /// The knots of each direction as openNURBS keeps them (order + count − 2).
+    pub knots: [Vec<f64>; 3],
+    /// Homogeneous control points (x·w, y·w, z·w, w), the third direction fastest.
+    pub points: Vec<[f64; 4]>,
+}
+
+/// A morph control (`ON_MorphControl`): the curve, surface or cage that deforms its captive
+/// objects.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MorphControl {
+    /// Its object, by its place in [`File::objects`].
+    pub object: usize,
+    /// `m_varient`: 1 curve, 2 surface, 3 cage.
+    pub kind: i32,
+    /// Where the control deforms to.
+    pub control: NurbsCage,
+    /// Where a curve or surface control starts from.
+    pub start: Option<NurbsCage>,
+    /// Of a cage: the transform from world to the cage's parameters at the start.
+    pub cage_xform: Option<DMat4>,
+    /// The objects it deforms.
+    pub captives: Vec<Uuid>,
+    /// The number of its localizers (the regions it acts in).
+    pub localizers: usize,
+    /// Space morph tolerance, quick preview and preserve structure (version 2.1).
+    pub tolerance: f64,
+    pub quick_preview: bool,
+    pub preserve_structure: bool,
+}
+
+/// A segment of a curve along polysurface edges (`ON_PolyEdgeSegment`), as stored: the object
+/// and component (edge or trim) it runs along, and the parts of it used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PolyEdgeSegment {
+    pub object: Uuid,
+    /// `ON_COMPONENT_INDEX`: its type (1 Brep vertex, 2 Brep edge, 4 Brep trim, ..) and index.
+    pub component: (i32, i32),
+    pub edge_domain: [f64; 2],
+    pub trim_domain: [f64; 2],
+    pub reversed: bool,
+    /// Its own domain, and the part of the edge it uses.
+    pub domain: [f64; 2],
+    pub curve_domain: [f64; 2],
 }

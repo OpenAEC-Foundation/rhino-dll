@@ -17,18 +17,24 @@
 //! exhaust memory. Clipping planes are read with their rectangle, plane and the viewports they
 //! clip, and the viewports of the file's views with them; lights with their kind, place, colour
 //! and attenuation ([`Light`]). Layouts are among the views, with their paper ([`Page`]); their
-//! details are read with their boundary, the model view they show and its scale. Objects the
-//! reader does not know are left out with the reason.
+//! details are read with their boundary, the model view they show and its scale. Cages, morph
+//! controls and curves along edges are drawn by their control nets and edges ([`rare`]); the
+//! plug-in data of objects, table records and the document is kept whole and decoded where
+//! its form is generic ([`plugins`]). Objects the reader does not know are left out with the
+//! reason.
 
 use glam::DVec3;
 use lights::{MAX_LIGHTS, TCODE_LIGHT_RECORD, TCODE_LIGHT_TABLE};
 use threedm_core::*;
 pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, Material, Mesh, Object as RhinoObject, Page, Pbr, Texture, View};
+pub use threedm_model::{Decoded, Dictionary, Entry, MorphControl, NurbsCage, Owner, PlugIn, PlugInData, PolyEdgeSegment, UserTable, Value};
 
 mod dimensions;
 mod document;
 pub mod drafting;
 mod lights;
+pub mod plugins;
+pub mod rare;
 pub mod subd;
 pub mod tessellate;
 mod v1;
@@ -98,6 +104,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
         v1::read(top, &mut r.file, &mut r.vertices)?;
         return Ok(r.file);
     }
+    let tables = top.clone();
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,
@@ -114,7 +121,19 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
         match chunk.typecode {
             TCODE_ENDOFFILE => break,
             TCODE_PROPERTIES_TABLE => read_properties(body, &mut r.file),
-            TCODE_SETTINGS_TABLE => read_settings(body, &mut r.file, &mut r.drafting),
+            TCODE_SETTINGS_TABLE => {
+                r.file.plugins = plugins::plugin_list(body.clone());
+                read_settings(body, &mut r.file, &mut r.drafting)
+            }
+            plugins::TCODE_USER_TABLE => match plugins::read_user_table(body) {
+                Ok(t) => {
+                    if let (plugins::ON_DOCUMENT_USER_STRING_LIST, Some(threedm_model::Decoded::UserText(text))) = (t.plugin, &t.decoded) {
+                        r.file.document_user_text.extend(text.iter().cloned());
+                    }
+                    r.file.user_tables.push(t);
+                }
+                Err(_) => *r.file.damaged.entry("user tables").or_default() += 1,
+            },
             TCODE_MATERIAL_TABLE => table(body, TCODE_MATERIAL_RECORD, &mut r, "materials", |mut c, f| {
                 let index = f.file.materials.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == ON_MATERIAL) {
@@ -181,6 +200,7 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                     return Ok(());
                 }
                 f.drafting.meters = f.file.meters;
+                plugins::object_record(c.clone(), f.file.objects.len(), &mut f.file);
                 let mut object = read_object(c, &mut f.vertices, &f.drafting)?;
                 dash(&mut object, &f.file.layers, &f.drafting.linetypes);
                 f.file.objects.push(object);
@@ -189,11 +209,14 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
             _ => {}
         }
     }
+    plugins::name_plugins(&mut r.file);
+    rare::resolve_poly_edges(&mut r.file, tables);
     Ok(r.file)
 }
 
 /// The records of a table, up to its end; a damaged record is counted and skipped.
 fn table<'a>(mut c: Cur<'a>, record: u32, r: &mut Reader<'a>, name: &'static str, mut each: impl FnMut(Cur<'a>, &mut Reader<'a>) -> R<()>) {
+    let mut index = 0;
     while c.left() > 0 {
         let Ok(chunk) = c.chunk() else {
             *r.file.damaged.entry(name).or_default() += 1;
@@ -202,8 +225,13 @@ fn table<'a>(mut c: Cur<'a>, record: u32, r: &mut Reader<'a>, name: &'static str
         if chunk.typecode == TCODE_ENDOFTABLE {
             break;
         }
-        if chunk.typecode == record && each(chunk.body, r).is_err() {
-            *r.file.damaged.entry(name).or_default() += 1;
+        if chunk.typecode == record {
+            // the user data of records that are objects (layers, materials, ..)
+            plugins::table_record(chunk.body.clone(), name, index, &mut r.file);
+            index += 1;
+            if each(chunk.body, r).is_err() {
+                *r.file.damaged.entry(name).or_default() += 1;
+            }
         }
     }
 }
@@ -811,7 +839,7 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
 }
 
 /// `ON_3dmObjectAttributes`: the item list of Rhino 5 and later, or the fixed layout before.
-fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
+pub(crate) fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
     let mut a = Attributes::default();
     if c.v.archive >= 5 && c.v.opennurbs >= 200_712_190 {
         let (major, _) = c.version()?;
@@ -1122,6 +1150,13 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
             Ok(detail) => detail,
             Err(_) => Geometry::Skipped("details that could not be read"),
         });
+    }
+    if let Some(geometry) = rare::geometry(class, &mut c, vertices) {
+        return match geometry {
+            Err(e) if e == TOO_MANY_VERTICES => Err(e),
+            Err(_) => Ok(Geometry::Skipped("cages, morph controls and other rare objects that could not be read")),
+            ok => ok,
+        };
     }
     Ok(Geometry::Skipped(match object_type {
         1 | 2 => "points",

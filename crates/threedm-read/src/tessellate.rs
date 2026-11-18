@@ -467,6 +467,13 @@ pub(super) fn nurbs_curve(order: usize, knots: &[f64], cvs: Vec<[f64; 4]>) -> R<
     Ok(Curve::Nurbs(Nurbs::new(order, knots, cvs)?))
 }
 
+/// The points of a curve from parameter `a` to `b` (backwards when `b < a`), within the chord
+/// tolerance of its size.
+pub(super) fn polyline_part(curve: &Curve, a: f64, b: f64) -> Vec<DVec3> {
+    let size = polyline(curve).windows(2).map(|w| w[0].distance(w[1])).sum::<f64>();
+    curve.sample(a, b, tolerance(size), &|p| p, 0, None).iter().map(|&s| curve.point(s)).collect()
+}
+
 pub(super) fn curve_object(class: Uuid, c: &mut Cur<'_>) -> Option<Vec<DVec3>> {
     let curve = read_curve(class, c, 0).ok()??;
     Some(polyline(&curve))
@@ -635,7 +642,7 @@ impl Surface {
         }
     }
 
-    fn point(&self, u: f64, v: f64) -> DVec3 {
+    pub(super) fn point(&self, u: f64, v: f64) -> DVec3 {
         match self {
             Surface::Plane { origin, x, y, domain, extents } => {
                 let s = lerp_param(u, domain[0], extents[0]);
@@ -707,7 +714,7 @@ impl Surface {
     }
 }
 
-fn read_surface_object(c: &mut Cur<'_>) -> R<Option<Surface>> {
+pub(super) fn read_surface_object(c: &mut Cur<'_>) -> R<Option<Surface>> {
     let Some(o) = c.object()? else { return Ok(None) };
     let mut data = o.data;
     read_surface(o.class, &mut data)
@@ -734,7 +741,12 @@ pub(super) fn is_surface(class: Uuid) -> bool {
 pub(super) fn surface_object(class: Uuid, data: Cur<'_>, vertices: &mut usize) -> R<Option<Mesh>> {
     let mut data = data;
     let Some(surface) = read_surface(class, &mut data)? else { return Ok(None) };
-    let Some(mesh) = face_mesh(&surface, Vec::new(), false) else { return Ok(None) };
+    surface_mesh(&surface, vertices)
+}
+
+/// A surface meshed over its whole domain. `vertices` counts the mesh vertices made so far.
+pub(super) fn surface_mesh(surface: &Surface, vertices: &mut usize) -> R<Option<Mesh>> {
+    let Some(mesh) = face_mesh(surface, Vec::new(), false) else { return Ok(None) };
     if mesh.positions.len() > super::MAX_VERTICES - *vertices {
         return Err(super::TOO_MANY_VERTICES.into());
     }
@@ -939,6 +951,14 @@ fn read_vertices(mut c: Cur<'_>) -> R<Vec<DVec3>> {
         c.f64()?; // tolerance
     }
     Ok(out)
+}
+
+/// Edge `index` of an `ON_Brep` from its 3d curve and edge chunks: its 3d curve, the part of it
+/// the edge uses, and whether it runs backwards.
+pub(super) fn brep_edge(curves3: Cur<'_>, edges: Cur<'_>, index: usize) -> Option<(Curve, [f64; 2], bool)> {
+    let edge = read_edges(edges).ok()?.into_iter().nth(index)?;
+    let curve = read_array(curves3, |c| read_curve_object(c, 0)).ok()?.into_iter().nth(usize::try_from(edge.curve).ok()?)??;
+    Some((curve, edge.proxy, edge.reversed))
 }
 
 /// `ON_BrepEdgeArray`.

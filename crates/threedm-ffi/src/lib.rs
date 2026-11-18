@@ -24,12 +24,21 @@
 //!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance,
 //!   or of a layout's detail its `boundary` on the page, the model `view` it shows, its `scale`
 //!   (page per model length) and whether it is `locked`; objects on a layout have `space` 2 and
-//!   the layout's id as `viewport`.
+//!   the layout's id as `viewport`; with its `plugin_data` (user data of its geometry and
+//!   attributes) and, of a cage, morph control or curve along edges, its `cage`, `morph_control`
+//!   or `poly_edge` segments;
+//! - `{"query": "plugins"}`: the file's plug-in list, its user tables (plug-in document data) and
+//!   document user text;
+//! - `{"query": "plugin_data", "bytes": true}`: every user data entry of objects and table
+//!   records with its owner, class, plug-in (and its name), item, version, copy count,
+//!   transform, goo flag, versions, length and what is decoded of it (user text, dictionaries
+//!   with typed values, XML or JSON text); with `"bytes": true` also the bytes as base64.
 
 use std::ffi::{c_char, CStr, CString};
 
 use serde_json::{json, Value};
-use threedm_read::{Document, File, Geometry, Light, LightKind, Material, Mesh, RhinoObject};
+use threedm_read::plugins::entry_type;
+use threedm_read::{Decoded, Dictionary, Document, File, Geometry, Light, LightKind, Material, Mesh, NurbsCage, Owner, PlugInData, RhinoObject, Value as DataValue};
 
 /// An open document behind the C ABI.
 pub struct ThreedmDocument(Document);
@@ -81,6 +90,82 @@ fn object_summary(o: &RhinoObject<'_>) -> Value {
         "hatch_boundary": a.hatch_boundary,
         "user_text": user,
     })
+}
+
+/// Bytes as base64 (RFC 4648, with padding).
+fn base64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for k in 0..4 {
+            out.push(if k <= c.len() { A[(n >> (18 - 6 * k) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+fn data_value_json(v: &DataValue) -> Value {
+    match v {
+        DataValue::Bool(b) => json!(b),
+        DataValue::Int(i) => json!(i),
+        DataValue::Number(x) => json!(x),
+        DataValue::Uuid(u) => json!(u.to_string()),
+        DataValue::String(s) => json!(s),
+        DataValue::Color(c) => json!(c),
+        DataValue::Numbers(n) => json!(n),
+        DataValue::Array(a) => Value::Array(a.iter().map(data_value_json).collect()),
+        DataValue::Dictionary(d) => dictionary_json(d),
+        DataValue::Object { class, bytes } => json!({"class": class.to_string(), "bytes": bytes}),
+        DataValue::Raw(b) => json!({"raw": base64(b)}),
+    }
+}
+
+fn dictionary_json(d: &Dictionary) -> Value {
+    let entries: Vec<Value> = d.entries.iter().map(|e| json!({"key": e.key, "kind": e.kind, "type": entry_type(e.kind), "value": data_value_json(&e.value)})).collect();
+    json!({"id": d.id.to_string(), "version": d.version, "name": d.name, "entries": entries})
+}
+
+fn decoded_json(d: &Option<Decoded>) -> Value {
+    match d {
+        Some(Decoded::UserText(pairs)) => json!({"user_text": pairs.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()}),
+        Some(Decoded::Dictionary(d)) => json!({"dictionary": dictionary_json(d)}),
+        Some(Decoded::Text(t)) => json!({"text": t}),
+        None => Value::Null,
+    }
+}
+
+fn owner_json(o: &Owner) -> Value {
+    match o {
+        Owner::Object { index, attributes } => json!({"object": index, "attributes": attributes}),
+        Owner::Table { table, index } => json!({"table": table, "index": index}),
+    }
+}
+
+fn plugin_data_json(d: &PlugInData<'_>, bytes: bool) -> Value {
+    let mut v = json!({
+        "owner": owner_json(&d.owner),
+        "class": d.class.to_string(),
+        "plugin": d.plugin.to_string(),
+        "plugin_name": d.plugin_name,
+        "item": d.item.to_string(),
+        "version": [d.version.0, d.version.1],
+        "copy_count": d.copy_count,
+        "xform": d.xform.to_cols_array(),
+        "goo": d.goo,
+        "archive_version": d.archive,
+        "opennurbs_version": d.opennurbs,
+        "length": d.bytes.len(),
+        "decoded": decoded_json(&d.decoded),
+    });
+    if bytes {
+        v["bytes"] = json!(base64(d.bytes));
+    }
+    v
+}
+
+fn cage_json(c: &NurbsCage) -> Value {
+    json!({"order": c.order, "count": c.count, "knots": c.knots, "points": c.points})
 }
 
 fn mesh_json(m: &Mesh) -> Value {
@@ -217,6 +302,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "layouts": file.views.iter().filter(|v| v.page.is_some()).map(view_json).collect::<Vec<_>>(),
                 "groups": file.groups.iter().map(|(i, n)| json!({"index": i, "name": n})).collect::<Vec<_>>(),
                 "kinds": kinds,
+                "plugin_data": file.plugin_data.len(),
+                "user_tables": file.user_tables.len(),
                 "damaged": file.damaged,
             }))
         }
@@ -242,11 +329,59 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
         "object" => {
             let id = req.get("id").and_then(Value::as_str).ok_or("\"object\" needs an \"id\" (a uuid)")?;
             let o = file.objects.iter().find(|o| o.attributes.id.to_string().eq_ignore_ascii_case(id)).ok_or_else(|| format!("no object {id}"))?;
+            let index = file.objects.iter().position(|x| std::ptr::eq(x, o)).unwrap_or(usize::MAX);
+            let bytes = req.get("bytes").and_then(Value::as_bool).unwrap_or(false);
             let mut v = object_summary(o);
             v["geometry"] = geometry_json(&o.geometry);
+            v["plugin_data"] = file.plugin_data.iter().filter(|d| matches!(d.owner, Owner::Object { index: i, .. } if i == index)).map(|d| plugin_data_json(d, bytes)).collect();
+            if let Some((_, c)) = file.cages.iter().find(|(i, _)| *i == index) {
+                v["cage"] = cage_json(c);
+            }
+            if let Some(m) = file.morph_controls.iter().find(|m| m.object == index) {
+                v["morph_control"] = json!({
+                    "kind": m.kind,
+                    "control": cage_json(&m.control),
+                    "start": m.start.as_ref().map(cage_json),
+                    "cage_xform": m.cage_xform.map(|x| x.to_cols_array()),
+                    "captives": m.captives.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
+                    "localizers": m.localizers,
+                    "tolerance": m.tolerance,
+                    "quick_preview": m.quick_preview,
+                    "preserve_structure": m.preserve_structure,
+                });
+            }
+            if let Some((_, segments)) = file.poly_edges.iter().find(|(i, _)| *i == index) {
+                v["poly_edge"] = segments
+                    .iter()
+                    .map(|s| json!({"object": s.object.to_string(), "component": [s.component.0, s.component.1], "edge_domain": s.edge_domain, "trim_domain": s.trim_domain, "reversed": s.reversed, "domain": s.domain, "curve_domain": s.curve_domain}))
+                    .collect();
+            }
             Ok(v)
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object)")),
+        "plugins" => {
+            let bytes = req.get("bytes").and_then(Value::as_bool).unwrap_or(false);
+            let tables: Vec<Value> = file
+                .user_tables
+                .iter()
+                .map(|t| {
+                    let mut v = json!({"plugin": t.plugin.to_string(), "plugin_name": t.plugin_name, "goo": t.goo, "archive_version": t.archive, "opennurbs_version": t.opennurbs, "length": t.bytes.len(), "decoded": decoded_json(&t.decoded)});
+                    if bytes {
+                        v["bytes"] = json!(base64(t.bytes));
+                    }
+                    v
+                })
+                .collect();
+            Ok(json!({
+                "plugins": file.plugins.iter().map(|p| json!({"id": p.id.to_string(), "name": p.name, "version": p.version, "file": p.file, "kind": p.kind, "organization": p.organization, "website": p.website, "email": p.email})).collect::<Vec<_>>(),
+                "user_tables": tables,
+                "document_user_text": file.document_user_text.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
+            }))
+        }
+        "plugin_data" => {
+            let bytes = req.get("bytes").and_then(Value::as_bool).unwrap_or(false);
+            Ok(file.plugin_data.iter().map(|d| plugin_data_json(d, bytes)).collect())
+        }
+        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object, plugins, plugin_data)")),
     }
 }
 
@@ -331,6 +466,25 @@ mod tests {
         assert!(one["result"]["geometry"].is_object());
         assert_eq!(query(&doc, r#"{"query": "nothing"}"#)["ok"], false);
         assert_eq!(query(&doc, "not json")["ok"], false);
+    }
+
+    #[test]
+    fn plugin_data_is_answered_with_its_bytes() {
+        assert_eq!([base64(b""), base64(b"f"), base64(b"fo"), base64(b"foo"), base64(b"foob")], ["", "Zg==", "Zm8=", "Zm9v", "Zm9vYg=="]);
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-models/objects.3dm");
+        let doc = Document::open(path).unwrap();
+        let all = query(&doc, r#"{"query": "plugin_data", "bytes": true}"#);
+        let records = all["result"].as_array().unwrap();
+        assert!(records.iter().all(|r| r["bytes"].as_str().unwrap().len() == r["length"].as_u64().unwrap().div_ceil(3) as usize * 4));
+        let dict = records.iter().find(|r| r["owner"]["attributes"] == true).unwrap();
+        let entries = dict["decoded"]["dictionary"]["entries"].as_array().unwrap();
+        let point = entries.iter().find(|e| e["key"] == "point3d").unwrap();
+        assert_eq!((point["type"].as_str(), &point["value"]), (Some("point3d"), &json!([1.0, 2.0, 3.0])));
+        let plugins = query(&doc, r#"{"query": "plugins"}"#);
+        assert_eq!(plugins["result"]["document_user_text"][0], json!(["Project", "Objects test"]));
+        let cage = query(&doc, r#"{"query": "objects"}"#)["result"]["objects"].as_array().unwrap().iter().find(|o| o["name"] == "Cage").unwrap()["id"].as_str().unwrap().to_string();
+        let one = query(&doc, &format!(r#"{{"query": "object", "id": "{cage}"}}"#));
+        assert_eq!(one["result"]["cage"]["count"], json!([4, 4, 4]));
     }
 
     #[test]

@@ -657,3 +657,154 @@ fn layouts_have_their_own_units() {
     let file = read(&data).unwrap();
     assert_eq!((file.unit, file.page_unit), ("millimetres", "millimetres"));
 }
+
+/// A number Rhino's script wrote, as a number or as text.
+fn number(j: &serde_json::Value) -> f64 {
+    j.as_f64().or_else(|| j.as_str().and_then(|s| s.parse().ok())).unwrap_or(f64::NAN)
+}
+
+/// Whether a dictionary value is what RhinoCommon reads back (`[type, value]` of
+/// make_objects.py): colours with their alpha (ours the transparency, 255 − alpha), planes by
+/// origin and axes (ours with the z axis and equation after them).
+fn same_value(v: &threedm_read::Value, j: &serde_json::Value) -> bool {
+    use threedm_read::Value;
+    let (ty, j) = (j[0].as_str().unwrap_or(""), &j[1]);
+    match v {
+        Value::Bool(b) => j.as_bool() == Some(*b),
+        Value::Int(i) => number(j) == *i as f64,
+        Value::Number(x) => (number(j) - x).abs() < 1e-9,
+        Value::Uuid(u) => j.as_str().is_some_and(|s| s.eq_ignore_ascii_case(&u.to_string())),
+        Value::String(s) => j.as_str() == Some(s),
+        Value::Color([r, g, b, t]) => *j == serde_json::json!([r, g, b, 255 - t]),
+        Value::Numbers(n) => {
+            let a = j.as_array().unwrap();
+            (a.len() == n.len() || ty == "Plane" && a.len() == 9) && a.iter().zip(n).all(|(a, b)| (number(a) - b).abs() < 1e-6)
+        }
+        Value::Array(items) => {
+            let a = j.as_array().unwrap();
+            let element = ty.trim_end_matches("[]");
+            a.len() == items.len() && a.iter().zip(items).all(|(a, v)| same_value(v, &serde_json::json!([element, a])))
+        }
+        Value::Dictionary(d) => same_dictionary(d, j),
+        Value::Object { class, bytes } => ty == "LineCurve" && *class == threedm_read::Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0") && *bytes > 0,
+        Value::Raw(_) => false,
+    }
+}
+
+fn same_dictionary(d: &threedm_read::Dictionary, j: &serde_json::Value) -> bool {
+    let j = j.as_object().unwrap();
+    d.entries.len() == j.len() && d.entries.iter().all(|e| j.get(&e.key).is_some_and(|v| same_value(&e.value, v)))
+}
+
+/// Plug-in data and rare objects (`objects.3dm`, from make_objects.py) as Rhino 9 reads them
+/// (`objects.json`): user dictionaries of every value type and user text on objects (geometry
+/// and attributes), a layer and a material, the document user text, the plug-in that wrote
+/// each; a morph control on a curve, a cage and a cage morph by their control points and
+/// extents.
+#[test]
+fn plugin_data_and_rare_objects_match_rhino() {
+    use threedm_read::{Decoded, Owner};
+    let data = load("objects.3dm");
+    let file = read(&data).unwrap();
+    let rhino: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(models().join("objects.json")).unwrap()).unwrap();
+    let decoded = |owner: Owner| file.plugin_data.iter().filter(move |d| d.owner == owner).filter_map(|d| d.decoded.as_ref());
+    let dictionary = |owner: Owner| decoded(owner).find_map(|d| if let Decoded::Dictionary(d) = d { Some(d.clone()) } else { None }).unwrap_or_default();
+    let text = |owner: Owner| -> serde_json::Value {
+        let pairs: serde_json::Map<String, serde_json::Value> = decoded(owner).filter_map(|d| if let Decoded::UserText(t) = d { Some(t.clone()) } else { None }).flatten().map(|(k, v)| (k, v.into())).collect();
+        pairs.into()
+    };
+    // every user data entry of RhinoCommon's dictionaries names its plug-in and is kept whole
+    let common = threedm_read::Uuid::parse("2544a64e-220d-4d65-b8d4-611bb57b46c7");
+    let dictionaries: Vec<_> = file.plugin_data.iter().filter(|d| d.class == common).collect();
+    assert_eq!(dictionaries.len(), 4);
+    assert!(dictionaries.iter().all(|d| !d.plugin.is_nil() && d.version == (2, 2) && d.archive == 90 && !d.goo && d.bytes.len() > 100));
+    for (table, records, key) in [("layers", &file.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>(), "layers"), ("materials", &file.materials.iter().map(|m| m.name.clone()).collect(), "materials")] {
+        for expected in rhino[key].as_array().unwrap() {
+            let index = records.iter().position(|n| n == expected["name"].as_str().unwrap()).unwrap();
+            let owner = Owner::Table { table, index };
+            assert!(same_dictionary(&dictionary(owner), &expected["dictionary"]), "{table} {index}");
+            assert_eq!(text(owner), expected["user_text"], "{table} {index}");
+        }
+    }
+    for expected in rhino["objects"].as_array().unwrap() {
+        let name = expected["name"].as_str().unwrap();
+        let index = file.objects.iter().position(|o| o.attributes.name == name).unwrap();
+        for (attributes, dict, user) in [(true, "attributes_dictionary", "attributes_user_text"), (false, "geometry_dictionary", "geometry_user_text")] {
+            let owner = Owner::Object { index, attributes };
+            assert!(same_dictionary(&dictionary(owner), &expected[dict]), "{name}: {dict}");
+            assert_eq!(text(owner), expected[user], "{name}: {user}");
+        }
+        // the extents of what is drawn
+        let points: Vec<DVec3> = match &file.objects[index].geometry {
+            Geometry::Lines(lines, _) => lines.iter().flatten().copied().collect(),
+            Geometry::Drawing { lines, .. } => lines.iter().flatten().copied().collect(),
+            _ => Vec::new(),
+        };
+        if name == "Morph curve" || name == "Edge curve" || name.starts_with("Cage") {
+            // the morph curve by its curve, the cages by their control nets
+            let points = if name == "Morph curve" { let Geometry::Lines(lines, _) = &file.objects[index].geometry else { panic!() }; lines[0].clone() } else { points };
+            let (lo, hi) = points.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+            let b: Vec<f64> = expected["bbox"].as_array().unwrap().iter().map(number).collect();
+            // a polyline within the display tolerance misses the extremes of a curve by a little
+            let tol = if name == "Morph curve" { 0.05 } else { 1e-9 };
+            assert!(lo.distance(DVec3::new(b[0], b[1], b[2])) < tol && hi.distance(DVec3::new(b[3], b[4], b[5])) < tol, "{name}: {lo} {hi} {b:?}");
+        }
+        // control points: of the morph curve its curve's, of the cages their grips
+        let grips: Vec<[f64; 3]> = expected.get("grips").and_then(|g| g.as_array()).map(|g| g.iter().map(|p| [number(&p[0]), number(&p[1]), number(&p[2])]).collect()).unwrap_or_default();
+        let control = file.morph_controls.iter().find(|m| m.object == index).map(|m| m.control.clone()).or_else(|| file.cages.iter().find(|c| c.0 == index).map(|c| c.1.clone()));
+        if let Some(control) = control {
+            let ours: Vec<[f64; 3]> = control.points.iter().map(|p| [p[0], p[1], p[2]]).collect();
+            assert_eq!(ours.len(), grips.len(), "{name}");
+            assert!(ours.iter().zip(&grips).all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9)), "{name}");
+        }
+        if let Some(m) = file.morph_controls.iter().find(|m| m.object == index) {
+            assert_eq!((m.tolerance, m.quick_preview, m.preserve_structure), (number(&expected["tolerance"]), expected["quick_preview"] == true, expected["preserve_structure"] == true), "{name}");
+            if let Some(curve) = expected["curve_points"].as_array().filter(|c| !c.is_empty()) {
+                assert_eq!((m.kind, m.control.count), (1, [curve.len(), 1, 1]));
+                assert_eq!(m.start.as_ref().map(|s| s.count), Some([curve.len(), 1, 1]));
+            } else {
+                // the cage morph deforms the sphere
+                assert_eq!(m.kind, 3);
+                let sphere = file.objects.iter().find(|o| o.attributes.name == "Captive sphere").unwrap().attributes.id;
+                assert_eq!(m.captives, [sphere]);
+            }
+        }
+    }
+    // the kinds as Rhino names them
+    let kind = |name: &str| match &file.objects.iter().find(|o| o.attributes.name == name).unwrap().geometry {
+        Geometry::Lines(_, kind) | Geometry::Meshes(_, kind) | Geometry::Drawing { kind, .. } | Geometry::Points { kind, .. } => *kind,
+        _ => "",
+    };
+    assert_eq!([kind("Cage"), kind("Morph curve"), kind("Edge curve")], ["Cage", "Morph control", "Curve"]);
+    let Geometry::Drawing { meshes, .. } = &file.objects.iter().find(|o| o.attributes.name == "Cage").unwrap().geometry else { panic!() };
+    assert_eq!(area(&file, &Geometry::Meshes(meshes.clone(), "Cage"), DMat4::IDENTITY, 0).round(), 2400.0);
+    // the document's user text, and the user tables (render content as XML)
+    let strings: Vec<(String, String)> = rhino["strings"].as_array().unwrap().iter().map(|p| (p[0].as_str().unwrap().to_string(), p[1].as_str().unwrap().to_string())).collect();
+    assert_eq!(file.document_user_text, strings);
+    let tables: Vec<String> = file.user_tables.iter().map(|t| t.plugin.to_string()).collect();
+    for p in rhino["plugins"].as_array().unwrap() {
+        assert!(tables.contains(&p["id"].as_str().unwrap().to_string()));
+    }
+    let rdk = file.user_tables.iter().find(|t| t.plugin_name == "Renderer Development Kit").unwrap();
+    assert!(matches!(&rdk.decoded, Some(Decoded::Text(t)) if t.starts_with("<xml>") && t.ends_with("</xml>")));
+}
+
+/// No object of McNeel's example files (when `OPENNURBS_EXAMPLES` names their folder) is of a
+/// class the reader does not know, and every user table is read.
+#[test]
+fn every_object_class_of_the_opennurbs_examples_is_known() {
+    let Ok(folder) = std::env::var("OPENNURBS_EXAMPLES") else { return };
+    let mut stack = vec![std::path::PathBuf::from(folder)];
+    while let Some(dir) = stack.pop() {
+        for path in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("3dm")) {
+                let data = std::fs::read(&path).unwrap();
+                let Ok(file) = read(&data) else { continue };
+                assert!(!file.objects.iter().any(|o| matches!(o.geometry, Geometry::Skipped("other objects"))), "{}", path.display());
+                assert!(!file.damaged.contains_key("user tables"), "{}", path.display());
+            }
+        }
+    }
+}

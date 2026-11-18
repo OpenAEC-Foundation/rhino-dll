@@ -14,7 +14,8 @@ holds only the value, a long one is followed by that many bytes of content, the 
 when the typecode has the CRC bit. Lengths are 4 bytes before archive version 50 and 8 bytes
 from it. `Cur` is a cursor over the bytes of one chunk: little-endian numbers, strings
 (UTF-16), uuids, colours, transforms, versioned chunks, compressed buffers, and `object()`
-(`ReadObject`: class uuid, class data, user data). Every read checks the bytes left, so a
+(`ReadObject`: class uuid, class data, user data, each user data entry with its header:
+`UserData`, its data read with the chunk lengths of the archive it was written in). Every read checks the bytes left, so a
 damaged file ends in an error, never in a panic or a huge allocation.
 
 `write` is the opposite for tests: it writes the chunks, objects, meshes, layers and tables the
@@ -23,8 +24,9 @@ readers read, so tests can make files with exactly the case they test.
 ## threedm-model: what comes out
 
 `File` holds the versions, the application that saved the file, the units (metres per unit),
-the layers, materials and block definitions, the objects, and the records that could not be
-read by table. Each `Object` has its `Attributes` (id, name, layer, material, colour and their
+the layers, materials and block definitions, the objects, the plug-in data (user data of
+objects and table records, user tables, document user text, the plug-in list), the
+parameters of cages and morph controls, and the records that could not be read by table. Each `Object` has its `Attributes` (id, name, layer, material, colour and their
 sources, visibility, mode and space), its user text and its `Geometry`: `Meshes` (with the
 object type to show), `Lines` (polylines), `Points` (borrowed from the file, read when used),
 `Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions
@@ -63,6 +65,24 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   the objects and layers they clip (Rhino 8's selective clipping), and the viewports of the
   file's views (`TCODE_SETTINGS_VIEW_LIST`: id, name, perspective; the active one first) to match
   them with.
+
+- cages (`ON_NurbsCage`, `rare`): their control net as lines and their six faces as NURBS
+  surfaces meshed as other surfaces are; morph controls (`ON_MorphControl`): their curve,
+  surface or cage as lines, with their parameters (kind, start, cage transform, captives,
+  localizers, tolerance, quick preview, preserve structure) in `File::morph_controls`; curves
+  along polysurface edges (`ON_PolyEdgeCurve`): their segments as stored (object, component,
+  domains), drawn along the edges of the polysurfaces they name; curves on surfaces and
+  viewports (their frustum). Point grids and curve, surface and offset surface proxies cannot be
+  stored (openNURBS writes nothing of them) and are left out with that reason;
+- plug-in data (`plugins`): every user data entry of objects (geometry and attributes) and of
+  table records that are objects (layers, materials, ..) with its header (class, plug-in, item,
+  version, copy count, transform, goo flag, versions) and its bytes as stored, in
+  `File::plugin_data` by owner; the user tables of the document (`TCODE_USER_TABLE`: plug-in,
+  goo flag, versions, record bytes) and the document user text; the plug-in list
+  (`TCODE_SETTINGS_PLUGINLIST`) to name the plug-ins. Decoded where the form is generic: user
+  text (`ON_UserStringList`), archivable dictionaries (RhinoCommon's `UserDictionary`,
+  `ON_ArchivableDictionary`: keys and typed values, nested dictionaries and arrays; a type not
+  known is kept as its bytes) and XML or JSON text (the render content of Rhino's RDK).
 
 Limits: at most `MAX_VERTICES` mesh vertices are read from a file and at most 120 000 SubD faces
 are made per object; what goes beyond is left out with the reason.

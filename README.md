@@ -19,7 +19,13 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   leaders are drawn as Rhino draws them: extension lines, dimension lines and arcs, arrowheads of
   the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
   and text). Clipping planes come with their rectangle, plane, depth, the objects they clip
-  (selective clipping) and the viewports they clip, and the file's views with them.
+  (selective clipping) and the viewports they clip, and the file's views with them. Cages and
+  morph controls are drawn as their control nets (cages with their faces), with their
+  parameters; curves along polysurface edges along those edges.
+- Plug-in data, nothing dropped: every user data entry of objects, layers, materials and the
+  other table records, and the document's user tables, as stored (ids, versions, bytes), with
+  the plug-in's name from the file's plug-in list; user text, archivable dictionaries
+  (RhinoCommon's `UserDictionary`, every value type) and XML or JSON text decoded.
 - A C ABI (`threedm.dll`) answering JSON requests, and a command line tool (`threedm`).
 - Drawing the model (colours by layer, object, parent or material, instance placement, hidden
   layers) is up to the program that uses it; Open BIM Suite's Rhino loader is an example.
@@ -67,8 +73,10 @@ threedm_free(info);
 threedm_close(doc);
 ```
 
-Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`) and
-`object` (by `id`, with its geometry); see `crates/threedm-ffi/src/lib.rs`.
+Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`),
+`object` (by `id`, with its geometry and plug-in data), `plugins` (plug-in list, user tables,
+document user text) and `plugin_data` (every user data entry, with `"bytes": true` its bytes as
+base64); see `crates/threedm-ffi/src/lib.rs`.
 
 From the command line:
 

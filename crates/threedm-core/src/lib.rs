@@ -331,22 +331,55 @@ impl<'a> Cur<'a> {
         if data.typecode != TCODE_OPENNURBS_CLASS_DATA {
             return err("an object without its data");
         }
-        let userdata = user_data(&mut body);
-        Ok(Some(Object { class, data: data.body, userdata }))
+        let entries = user_data_entries(&mut body);
+        let userdata = entries.iter().map(|e| (e.class, e.data.clone())).collect();
+        Ok(Some(Object { class, data: data.body, userdata, entries }))
     }
 }
 
-/// An object as read by `ReadObject`: its class id, its data and its user data by class id.
+/// An object as read by `ReadObject`: its class id, its data and its user data by class id
+/// (`userdata`), and the same user data with their headers (`entries`).
 pub struct Object<'a> {
     pub class: Uuid,
     pub data: Cur<'a>,
     pub userdata: Vec<(Uuid, Cur<'a>)>,
+    pub entries: Vec<UserData<'a>>,
+}
+
+/// A user data entry (`ON_UserData` as `WriteObjectUserData` writes it): the header and the
+/// data, as stored.
+#[derive(Clone)]
+pub struct UserData<'a> {
+    /// The class of the user data (`ON_UserData` subclass, or the plug-in's own).
+    pub class: Uuid,
+    /// `m_userdata_uuid`: which item of the plug-in's data this is.
+    pub item: Uuid,
+    /// `m_application_uuid`: the plug-in that wrote it (nil before header 2.1).
+    pub plugin: Uuid,
+    /// The version of the entry's chunk (1.0, 2.0, 2.1 or 2.2).
+    pub version: (u8, u8),
+    pub copy_count: i32,
+    /// `m_userdata_xform`: the transforms applied to the object since the data was attached.
+    pub xform: DMat4,
+    /// Saved by a program that did not know the class (`ON_UnknownUserData`, "goo").
+    pub goo: bool,
+    /// The archive and openNURBS versions the data was written with (0 when not stored).
+    pub archive: i32,
+    pub opennurbs: u32,
+    /// The data: the content of its anonymous chunk, read with the archive version it was
+    /// written with.
+    pub data: Cur<'a>,
 }
 
 /// User data entries up to `TCODE_OPENNURBS_CLASS_END` (`ReadObjectUserData`): each a version,
 /// a header with the user data class id, and the data in an anonymous chunk. Damaged entries
 /// are left out.
 pub fn user_data<'a>(c: &mut Cur<'a>) -> Vec<(Uuid, Cur<'a>)> {
+    user_data_entries(c).into_iter().map(|e| (e.class, e.data)).collect()
+}
+
+/// User data entries with their headers, up to `TCODE_OPENNURBS_CLASS_END`.
+pub fn user_data_entries<'a>(c: &mut Cur<'a>) -> Vec<UserData<'a>> {
     let mut out = Vec::new();
     while c.left() > 0 {
         let Ok(chunk) = c.chunk() else { break };
@@ -363,29 +396,50 @@ pub fn user_data<'a>(c: &mut Cur<'a>) -> Vec<(Uuid, Cur<'a>)> {
     out
 }
 
-pub fn user_data_entry(mut c: Cur<'_>) -> R<Option<(Uuid, Cur<'_>)>> {
-    let (major, _) = c.version()?;
-    let class = match major {
+/// One `TCODE_OPENNURBS_CLASS_USERDATA` chunk: its version, its header (in a chunk of its own
+/// from 2.0; the plug-in id from 2.1; goo and versions from 2.2) and its data.
+pub fn user_data_entry(mut c: Cur<'_>) -> R<Option<UserData<'_>>> {
+    let version = c.version()?;
+    let mut h = match version.0 {
         2 => {
             let header = c.chunk()?;
             if header.typecode != TCODE_OPENNURBS_CLASS_USERDATA_HEADER {
                 return Ok(None);
             }
-            header.body.clone().uuid()?
+            header.body
         }
-        1 => {
-            let class = c.uuid()?;
-            // item id, copy count, transform
-            c.take(16 + 4 + 128)?;
-            class
-        }
+        1 => c.clone(),
         _ => return Ok(None),
     };
-    let data = c.chunk()?;
-    if data.typecode != TCODE_ANONYMOUS_CHUNK {
+    let class = h.uuid()?;
+    let item = h.uuid()?;
+    let copy_count = h.i32()?;
+    let xform = h.xform()?;
+    let (mut plugin, mut goo, mut archive, mut opennurbs) = (Uuid::default(), false, 0, 0);
+    if version.0 == 2 && version.1 >= 1 {
+        plugin = h.uuid()?;
+        if version.1 >= 2 {
+            goo = h.bool()?;
+            archive = h.i32()?;
+            opennurbs = h.u32()?;
+        }
+    }
+    if version.0 == 1 {
+        c = h;
+    }
+    let chunk = c.chunk()?;
+    if chunk.typecode != TCODE_ANONYMOUS_CHUNK {
         return Ok(None);
     }
-    Ok(Some((class, data.body)))
+    let mut data = chunk.body;
+    // the data has the chunk lengths of the archive it was written in: without versions in its
+    // header, of Rhino 4 or older (4-byte lengths) when the file is newer
+    data.v.archive = match archive {
+        0 if c.v.archive >= 50 => 5,
+        0 => c.v.archive,
+        a => a as u32,
+    };
+    Ok(Some(UserData { class, item, plugin, version, copy_count, xform, goo, archive, opennurbs, data }))
 }
 
 /// `ON_UserStringList`: key and value pairs ("user text").
