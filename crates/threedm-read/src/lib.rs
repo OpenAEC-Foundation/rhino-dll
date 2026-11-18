@@ -1,9 +1,9 @@
 //! Semantic readers of the 3dm reader: a Rhino file (Rhino 2 to 9, archive versions 2, 3, 4, 5,
 //! 50, 60, 70, 80 and 90) to the neutral model of `threedm-model`. Written from McNeel's
 //! openNURBS source, which McNeel publishes as the reference for reading and writing 3dm files:
-//! the properties, settings, material, layer, block definition, dimension style, hatch pattern
-//! and object tables, and of each object its class data, its attributes and its user data.
-//! Nothing of openNURBS is compiled in.
+//! the properties, settings, material, layer, block definition, linetype, section style,
+//! dimension style, hatch pattern and object tables, and of each object its class data, its
+//! attributes and its user data. Nothing of openNURBS is compiled in.
 //!
 //! Objects become meshes, polylines, points or block instances: meshes as stored; the render
 //! meshes Rhino keeps with polysurfaces (Breps), surfaces and extrusions (the analysis meshes
@@ -26,20 +26,30 @@
 use glam::DVec3;
 use lights::{MAX_LIGHTS, TCODE_LIGHT_RECORD, TCODE_LIGHT_TABLE};
 use threedm_core::*;
-pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, Material, Mesh, Object as RhinoObject, Page, Pbr, Texture, View};
-pub use threedm_model::{Decoded, Dictionary, Entry, MorphControl, NurbsCage, Owner, PlugIn, PlugInData, PolyEdgeSegment, UserTable, Value};
+pub use threedm_model::{Attributes, Bitmap, BlockDefinition, ClipSelection, ClippingPlane, File, Geometry, Layer as RhinoLayer, Light, LightKind, LineCap, LineJoin, Linetype, Material, Mesh, Object as RhinoObject, Page, Pbr, SectionStyle, Stroke, Texture, View};
+pub use threedm_model::{Decoded, Dictionary, Entry, MorphControl, NurbsCage, Owner, PlugInData, PolyEdgeSegment, Value};
 
 mod dimensions;
 mod document;
 pub mod drafting;
+mod fonts;
 mod lights;
 pub mod plugins;
 pub mod rare;
+mod styles;
+mod settings;
+mod render;
 pub mod subd;
 pub mod tessellate;
 mod v1;
+mod xml;
 
 pub use document::Document;
+pub use threedm_model::{ConstructionPlane, DimensionStyle, EarthAnchor, Font, GridDefaults, HistoryData, HistoryRecord, LayerState, MeshSettings, PlugIn, DocumentRenderSettings, Settings, Snapshot, UserTable};
+pub use threedm_model::{
+    CurvePiping, Decal, Displacement, Dithering, EdgeSoftening, GroundPlane, LinearWorkflow, MeshModifiers, PostEffect, RenderContent, RenderSettings,
+    RenderValue, SafeFrame, SafeFrameFrame, ShutLining, ShutLiningCurve, Skylight, Sun, Thickening,
+};
 pub use threedm_core::{Uuid, Versions, R};
 
 const MAGIC: &[u8] = b"3D Geometry File Format ";
@@ -55,11 +65,14 @@ pub struct Options {
     /// The TrueType or OpenType font texts are set in (by their capital height); without one,
     /// texts are left out.
     pub font: Option<&'static [u8]>,
+    /// The font file of a font the file names (family, bold, italic), when the caller has it:
+    /// each text, dimension and leader is then set in its own font, else in `font`.
+    pub resolve_font: Option<fn(&threedm_model::Font) -> Option<&'static [u8]>>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { font: if cfg!(feature = "font") { Some(FONT) } else { None } }
+        Options { font: if cfg!(feature = "font") { Some(FONT) } else { None }, resolve_font: None }
     }
 }
 
@@ -78,15 +91,19 @@ struct Reader<'a> {
 
 /// What texts and hatches are drawn with.
 struct Drafting {
-    /// Linetypes by index: their dashes (positive) and gaps (negative), in model units.
-    linetypes: Vec<(i32, Vec<f64>)>,
     patterns: Vec<drafting::HatchPattern>,
     dim_styles: Vec<drafting::DimStyle>,
-    font: Option<&'static [u8]>,
+    /// The font the object being read is set in: its own when the caller resolves it, else
+    /// `default_font`.
+    font: std::cell::Cell<Option<&'static [u8]>>,
+    default_font: Option<&'static [u8]>,
+    resolve_font: Option<fn(&threedm_model::Font) -> Option<&'static [u8]>>,
     /// Metres per model unit, for lengths shown in other units.
     meters: f64,
     /// The document's annotation settings (Rhino 2 and 3), for annotations without a style.
     document_style: Option<drafting::DimStyle>,
+    /// The font table of Rhino 4 and 5, by index.
+    fonts: Vec<(i32, threedm_model::Font)>,
 }
 
 /// Reads a Rhino file: its tables, and its objects as meshes, polylines, points and block
@@ -98,13 +115,15 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
     let version: u32 = std::str::from_utf8(&header[24..32]).ok().and_then(|s| s.trim().parse().ok()).ok_or("Rhino 3dm: the header has no version")?;
     let file = File { versions: Versions { archive: version, opennurbs: 0 }, meters: 0.001, unit: "millimetres", ..File::default() };
     let mut top = Cur { data, pos: start + 32, v: file.versions };
-    let mut r = Reader { file, drafting: Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: options.font, meters: 0.001, document_style: None }, vertices: 0 };
+    let mut r = Reader { file, drafting: Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: std::cell::Cell::new(options.font), default_font: options.font, resolve_font: options.resolve_font, meters: 0.001, document_style: None, fonts: Vec::new() }, vertices: 0 };
     if version < 2 {
         // Rhino 1: top-level chunks of its own
         v1::read(top, &mut r.file, &mut r.vertices)?;
         return Ok(r.file);
     }
     let tables = top.clone();
+    // the RDK document (render content and settings), read once the settings are
+    let mut rdk = None;
     while top.left() > 0 {
         let chunk = match top.chunk() {
             Ok(c) => c,
@@ -120,20 +139,25 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
         body.v = r.file.versions;
         match chunk.typecode {
             TCODE_ENDOFFILE => break,
-            TCODE_PROPERTIES_TABLE => read_properties(body, &mut r.file),
-            TCODE_SETTINGS_TABLE => {
-                r.file.plugins = plugins::plugin_list(body.clone());
-                read_settings(body, &mut r.file, &mut r.drafting)
-            }
-            plugins::TCODE_USER_TABLE => match plugins::read_user_table(body) {
-                Ok(t) => {
-                    if let (plugins::ON_DOCUMENT_USER_STRING_LIST, Some(threedm_model::Decoded::UserText(text))) = (t.plugin, &t.decoded) {
-                        r.file.document_user_text.extend(text.iter().cloned());
-                    }
-                    r.file.user_tables.push(t);
+            render::TCODE_USER_TABLE => {
+                // the RDK document (rendering), and every plug-in's table as stored
+                match render::read_rdk_document(body.clone()) {
+                    Ok(Some(xml)) => rdk = Some(xml),
+                    Ok(None) => {}
+                    Err(_) => *r.file.damaged.entry("render content").or_default() += 1,
                 }
-                Err(_) => *r.file.damaged.entry("user tables").or_default() += 1,
-            },
+                match settings::read_user_table(body) {
+                    Ok(mut t) => {
+                        settings::read_known_table(&t, r.file.versions, &mut r.file);
+                        // what else is self-describing: dictionaries, XML and JSON text
+                        plugins::decode_user_table(&mut t, r.file.versions);
+                        r.file.user_tables.push(t);
+                    }
+                    Err(_) => *r.file.damaged.entry("user tables").or_default() += 1,
+                }
+            }
+            TCODE_PROPERTIES_TABLE => read_properties(body, &mut r.file),
+            TCODE_SETTINGS_TABLE => read_settings(body, &mut r.file, &mut r.drafting),
             TCODE_MATERIAL_TABLE => table(body, TCODE_MATERIAL_RECORD, &mut r, "materials", |mut c, f| {
                 let index = f.file.materials.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == ON_MATERIAL) {
@@ -166,10 +190,17 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 }
                 Ok(())
             }),
-            TCODE_LINETYPE_TABLE => table(body, TCODE_LINETYPE_RECORD, &mut r, "linetypes", |mut c, f| {
-                let position = f.drafting.linetypes.len() as i32;
-                if let Some(object) = c.object()?.filter(|o| o.class == ON_LINETYPE) {
-                    f.drafting.linetypes.push(read_linetype(object.data, position)?);
+            styles::TCODE_LINETYPE_TABLE => table(body, styles::TCODE_LINETYPE_RECORD, &mut r, "linetypes", |mut c, f| {
+                let position = f.file.linetypes.len() as i32;
+                if let Some(object) = c.object()?.filter(|o| o.class == styles::ON_LINETYPE) {
+                    f.file.linetypes.push(styles::read_linetype(object.data, position)?);
+                }
+                Ok(())
+            }),
+            styles::TCODE_SECTION_STYLE_TABLE => table(body, styles::TCODE_SECTION_STYLE_RECORD, &mut r, "section styles", |mut c, f| {
+                let position = f.file.section_styles.len() as i32;
+                if let Some(mut object) = c.object()?.filter(|o| o.class == styles::ON_SECTION_STYLE) {
+                    f.file.section_styles.push(styles::read_section_style(&mut object.data, position)?);
                 }
                 Ok(())
             }),
@@ -183,6 +214,18 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 let position = f.drafting.patterns.len() as i32;
                 if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_HATCH_PATTERN) {
                     f.drafting.patterns.push(drafting::read_pattern(object.data, position)?);
+                }
+                Ok(())
+            }),
+            fonts::TCODE_FONT_TABLE => table(body, fonts::TCODE_FONT_RECORD, &mut r, "fonts", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == fonts::ON_TEXT_STYLE) {
+                    f.drafting.fonts.push(fonts::read_v5_font(object.data)?);
+                }
+                Ok(())
+            }),
+            settings::TCODE_HISTORYRECORD_TABLE => table(body, settings::TCODE_HISTORYRECORD_RECORD, &mut r, "history records", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == settings::ON_HISTORY_RECORD) {
+                    f.file.history.push(settings::read_history_record(object.data)?);
                 }
                 Ok(())
             }),
@@ -202,16 +245,44 @@ pub fn read_with<'a>(data: &'a [u8], options: &Options) -> R<File<'a>> {
                 f.drafting.meters = f.file.meters;
                 plugins::object_record(c.clone(), f.file.objects.len(), &mut f.file);
                 let mut object = read_object(c, &mut f.vertices, &f.drafting)?;
-                dash(&mut object, &f.file.layers, &f.drafting.linetypes);
+                if matches!(object.geometry, Geometry::Lines(_, "Curve")) {
+                    object.stroke = Some(styles::stroke(&object.attributes, &f.file.layers, &f.file.linetypes, f.file.meters));
+                }
+                dash(&mut object, &f.file.layers, &f.file.linetypes);
                 f.file.objects.push(object);
                 Ok(())
             }),
             _ => {}
         }
     }
-    plugins::name_plugins(&mut r.file);
     rare::resolve_poly_edges(&mut r.file, tables);
+    if let Some(xml) = rdk {
+        match render::read_document(&xml, &mut r.file.render) {
+            Ok(contents) => r.file.render_content = contents,
+            Err(_) => *r.file.damaged.entry("render content").or_default() += 1,
+        }
+    }
+    finish(&mut r);
     Ok(r.file)
+}
+
+/// What is known once all is read: the dimension styles with their fonts, the font table, the
+/// names of the plug-ins that saved tables.
+fn finish(r: &mut Reader<'_>) {
+    let fonts = &r.drafting.fonts;
+    r.file.dim_styles = r
+        .drafting
+        .dim_styles
+        .iter()
+        .map(|d| threedm_model::DimensionStyle { id: d.id, index: d.index, name: d.name.clone(), font: d.font.clone().or_else(|| fonts.iter().find(|(i, _)| *i == d.text_style).map(|(_, f)| f.clone())) })
+        .collect();
+    r.file.fonts = fonts.clone();
+    for t in &mut r.file.user_tables {
+        if let Some(p) = r.file.settings.plugins.iter().find(|p| p.id == t.plugin) {
+            t.name = p.name.clone();
+        }
+    }
+    plugins::name_plugins(&mut r.file);
 }
 
 /// The records of a table, up to its end; a damaged record is counted and skipped.
@@ -290,21 +361,29 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
                 }
             }
             TCODE_SETTINGS_ATTRIBUTES => {
-                if let Ok(Some((meters, unit))) = read_page_units(chunk.body) {
+                if let Ok(Some((meters, unit))) = read_page_units(chunk.body.clone()) {
                     (file.page_meters, file.page_unit) = (meters, unit);
                 }
+                settings::read_chunk(&chunk, &mut file.settings);
             }
             TCODE_SETTINGS_VIEW_LIST => {
-                if let Ok(views) = read_views(chunk.body) {
+                if let Ok(views) = read_views(chunk.body.clone()) {
                     file.views = views;
                 }
+                settings::read_chunk(&chunk, &mut file.settings);
             }
             TCODE_SETTINGS_NAMED_VIEW_LIST => {
                 if let Ok(views) = read_views(chunk.body) {
                     file.named_views = views;
                 }
             }
-            _ => {}
+            render::TCODE_SETTINGS_RENDER => {
+                if render::read_render_settings(chunk.body.clone(), &mut file.render).is_err() {
+                    *file.damaged.entry("render settings").or_default() += 1;
+                }
+                settings::read_chunk(&chunk, &mut file.settings);
+            }
+            _ => settings::read_chunk(&chunk, &mut file.settings),
         }
     }
 }
@@ -476,7 +555,7 @@ fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
     let color = c.color()?;
     c.take(20)?; // obsolete line style
     let name = c.wstring()?;
-    let mut layer = RhinoLayer { index: if stored >= 0 { stored } else { index }, name, id: Uuid::default(), parent: Uuid::default(), color, visible: mode != 1, material, linetype: -1 };
+    let mut layer = RhinoLayer { index: if stored >= 0 { stored } else { index }, name, color, visible: mode != 1, material, linetype: -1, section_style: -1, ..RhinoLayer::default() };
     if minor >= 1 {
         layer.visible = c.bool()? && mode != 1;
     }
@@ -484,7 +563,9 @@ fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
         layer.linetype = c.i32()?;
     }
     if minor >= 3 {
-        c.take(12)?; // plot colour and weight
+        // an unset print colour is the layer's colour (ON_Layer::PlotColor)
+        layer.plot_color = Some(c.color()?).filter(|p| *p != [255; 4]).unwrap_or(color);
+        layer.plot_weight = c.f64()?;
     }
     if minor >= 4 {
         c.bool()?; // locked
@@ -493,9 +574,60 @@ fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
         layer.id = c.uuid()?;
         if minor >= 6 && c.v.opennurbs > 200_505_110 {
             layer.parent = c.uuid()?;
+            c.bool()?; // expanded
         }
     }
+    if minor >= 7 {
+        // what follows is read as far as it goes: a short record keeps what it has
+        let _ = read_layer_items(&mut c, minor, &mut layer);
+    }
     Ok(layer)
+}
+
+/// The rest of `ON_Layer` (1.7 and later): its rendering attributes, display material (1.8),
+/// two obsolete bytes (only 1.9), then items (1.10 and later; 0 ends them): the obsolete
+/// selective clipping (28), section hatch index (29), scale (30) and rotation (31), the section
+/// fill rule (32, 1.12), an obsolete linetype (33, 1.13), visible in new details (34, 1.14), its
+/// own section style (35, 1.15), an obsolete list type (36); Rhino 9 adds the section style of
+/// the table by index (39).
+fn read_layer_items(c: &mut Cur<'_>, minor: u8, layer: &mut RhinoLayer) -> R<()> {
+    c.chunk()?; // rendering attributes
+    if minor < 8 {
+        return Ok(());
+    }
+    c.uuid()?; // display material
+    if minor == 9 {
+        c.take(2)?;
+    }
+    if minor < 10 {
+        return Ok(());
+    }
+    loop {
+        match c.u8()? {
+            28 => {
+                c.bool()?;
+                c.chunk()?;
+            }
+            29 => own_section(&mut layer.custom_section_style).hatch_index = c.i32()?,
+            30 => own_section(&mut layer.custom_section_style).hatch_scale = c.f64()?,
+            31 => own_section(&mut layer.custom_section_style).hatch_rotation = c.f64()?,
+            32 => own_section(&mut layer.custom_section_style).fill_rule = c.u8()?.min(1),
+            33 => {
+                c.chunk()?;
+            }
+            34 => {
+                c.bool()?;
+            }
+            35 => *own_section(&mut layer.custom_section_style) = styles::read_section_style(c, -1)?,
+            36 => {
+                c.bool()?;
+            }
+            // Rhino 9: the section style of the table, by index
+            39 => layer.section_style = c.i32()?,
+            _ => break,
+        }
+    }
+    Ok(())
 }
 
 /// `ON_Material`: colours, shine, reflectivity, index of refraction and transparency, the
@@ -522,7 +654,7 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
         let (mut attributes, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
         let bits = attributes.u32()?;
         if bits & 1 != 0 {
-            attributes.uuid()?;
+            m.id = attributes.uuid()?;
         }
         if bits & 2 != 0 {
             attributes.uuid()?;
@@ -533,13 +665,24 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
         if bits & 8 != 0 {
             m.name = attributes.wstring()?;
         }
-        b.uuid()?; // plug-in
+        m.plug_in = b.uuid()?;
         read_material_colors(&mut b, &mut m)?;
         // Rhino reads these colours without their alpha
         for color in [&mut m.ambient, &mut m.diffuse, &mut m.emission, &mut m.specular, &mut m.reflection, &mut m.transparent] {
             color[3] = 0;
         }
         m.textures = read_textures(&mut b)?;
+        // material channels, shareable, lighting, Fresnel and glossiness, then the render material;
+        // a record that ends before them keeps what it has
+        let mut rest = || -> R<Uuid> {
+            let channels = b.count(20)?;
+            b.take(20 * channels + 3 + 3 * 8)?;
+            b.uuid()
+        };
+        m.render_material = rest().unwrap_or_default();
+        if m.render_material.is_nil() {
+            m.render_material = render::obsolete_material_instance(&object.userdata).unwrap_or_default();
+        }
         return Ok(m);
     }
     let (major, minor) = c.version()?;
@@ -578,19 +721,34 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
         }
         2 => {
             // Rhino 4 and 5
-            let (mut b, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
-            b.uuid()?;
+            let (mut b, _, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+            m.id = b.uuid()?;
             m.index = b.i32()?;
             m.name = b.wstring()?;
-            b.uuid()?;
+            m.plug_in = b.uuid()?;
             read_material_colors(&mut b, &mut m)?;
             // before December 2009 the default transparent colour was grey: Rhino takes the diffuse
             if c.v.opennurbs < 200_912_010 && m.transparent[..3] == [128, 128, 128] {
                 m.transparent = m.diffuse;
             }
             m.textures = read_textures(&mut b)?;
+            // Flamingo library (1.1), material channels (1.2), shareable and lighting (1.3),
+            // Fresnel and glossiness (1.4), then the render material (1.5)
+            if minor >= 5 {
+                let mut rest = || -> R<Uuid> {
+                    b.wstring()?;
+                    let channels = b.count(20)?;
+                    b.take(20 * channels + 3 + 3 * 8)?;
+                    b.uuid()
+                };
+                m.render_material = rest().unwrap_or_default();
+            }
         }
         _ => return err("a material of an unknown version"),
+    }
+    // files before Rhino 6 keep the render material in RDK user data
+    if m.render_material.is_nil() {
+        m.render_material = render::obsolete_material_instance(&object.userdata).unwrap_or_default();
     }
     Ok(m)
 }
@@ -803,21 +961,30 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
     let object = c.object()?;
     let mut attributes = Attributes::default();
     let mut user = Vec::new();
+    let (mut decals, mut modifiers) = (Vec::new(), threedm_model::MeshModifiers::default());
     while c.left() > 0 {
         let chunk = c.chunk()?;
         match chunk.typecode {
             TCODE_OBJECT_RECORD_ATTRIBUTES => attributes = read_attributes(chunk.body)?,
             TCODE_OBJECT_RECORD_ATTRIBUTES_USERDATA => {
                 let mut body = chunk.body;
-                user.extend(user_strings_of(&user_data(&mut body)));
+                let userdata = user_data(&mut body);
+                user.extend(user_strings_of(&userdata));
+                render::object_render(&userdata, &mut decals, &mut modifiers);
             }
             TCODE_OBJECT_RECORD_END => break,
             _ => {}
         }
     }
+    let font = object.as_ref().and_then(|o| fonts::object_font(o.class, o.data.clone(), &drafting.dim_styles, &drafting.fonts));
+    // set in its own font when the caller has it
+    drafting.font.set(font.as_ref().and_then(|f| drafting.resolve_font.and_then(|resolve| resolve(f))).or(drafting.default_font));
     let geometry = match object {
         Some(object) => {
+            // a hatch's background fill and boundary are in its attributes
+            let hatch = (object.class == drafting::ON_HATCH && (attributes.hatch_background.is_some() || attributes.hatch_boundary)).then(|| object.data.clone());
             user.extend(user_strings_of(&object.userdata));
+            render::object_render(&object.userdata, &mut decals, &mut modifiers);
             if object.class == ON_TEXT_DOT {
                 // its text, shown with its point
                 user.extend(text_dot_text(object.data.clone()).unwrap_or_default());
@@ -828,14 +995,18 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
                 }
             }
             match read_geometry(object, object_type, vertices, drafting) {
-                Ok(geometry) => geometry,
+                Ok(geometry) => match hatch.map(|mut c| drafting::read_hatch(&mut c)) {
+                    Some(Ok(h)) => drafting::hatch_drawing(geometry, &h, attributes.hatch_background, attributes.hatch_boundary),
+                    _ => geometry,
+                },
                 Err(e) if e == TOO_MANY_VERTICES => Geometry::Skipped("meshes beyond the vertex limit"),
                 Err(_) => Geometry::Skipped("unreadable objects"),
             }
         }
         None => Geometry::Skipped("empty objects"),
     };
-    Ok(RhinoObject { geometry, attributes, user })
+    (attributes.decals, attributes.mesh_modifiers) = (decals, modifiers);
+    Ok(RhinoObject { geometry, attributes, user, stroke: None, font })
 }
 
 /// `ON_3dmObjectAttributes`: the item list of Rhino 5 and later, or the fixed layout before.
@@ -848,8 +1019,7 @@ pub(crate) fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
         }
         a.id = c.uuid()?;
         a.layer = c.i32()?;
-        // items in increasing order, 0 ends the list; from the custom section style (39) on
-        // nothing is read
+        // items in increasing order, 0 ends the list (and one this reader does not know)
         loop {
             let item = c.u8()?;
             match item {
@@ -896,31 +1066,33 @@ pub(crate) fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
                     let n = list.count(16)?;
                     list.take(16 * n)?; // the clipping planes that clip it
                 }
-                29 => {
-                    c.u8()?; // section attributes source
-                }
-                30 => {
-                    c.i32()?; // section hatch pattern
-                }
-                31 | 32 => {
-                    c.f64()?; // section hatch scale, rotation
-                }
+                29 => a.section_source = c.u8()?,
+                // section attributes before the section style (39): into the object's own
+                30 => own_section(&mut a.custom_section_style).hatch_index = c.i32()?,
+                31 => own_section(&mut a.custom_section_style).hatch_scale = c.f64()?,
+                32 => own_section(&mut a.custom_section_style).hatch_rotation = c.f64()?,
                 33 => a.linetype_scale = c.f64()?,
                 34 => a.hatch_background = Some(c.color()?),
                 35 => a.hatch_boundary = c.bool()?,
                 36 => {
                     c.xform()?; // object frame
                 }
-                37 => {
-                    c.u8()?; // section fill rule
-                }
+                37 => own_section(&mut a.custom_section_style).fill_rule = c.u8()?.min(1),
                 38 => {
                     // ON_Linetype: read from a copy, then passed by
-                    if let Ok((_, segments)) = read_linetype(c.clone(), 0) {
-                        a.custom_linetype = Some(segments);
+                    if let Ok(lt) = styles::read_linetype(c.clone(), -1) {
+                        a.custom_linetype = Some(lt.segments.clone());
+                        a.custom_linetype_style = Some(lt);
                     }
                     c.chunk()?;
                 }
+                39 => a.custom_section_style = Some(styles::read_section_style(&mut c, -1)?),
+                40 => a.clipping_label = c.u8()?,
+                41 => {
+                    c.bool()?; // obsolete clipping list type
+                }
+                // Rhino 9: the section style of the table, by index
+                43 => a.section_style = c.i32()?,
                 _ => break,
             }
         }
@@ -982,6 +1154,11 @@ pub(crate) fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
         }
     }
     Ok(a)
+}
+
+/// The own section style of an object or layer, made when a section attribute comes before it.
+fn own_section(style: &mut Option<SectionStyle>) -> &mut SectionStyle {
+    style.get_or_insert_with(SectionStyle::default)
 }
 
 /// `ON_ObsoletePageSpaceObjectId`: the display material of the reference that puts an object
@@ -1083,7 +1260,7 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
             Ok(text) => {
                 // in its dimension style's text height and model space scale
                 let style = d.dim_styles.iter().find(|s| s.id == text.style()).or(d.dim_styles.first());
-                match d.font {
+                match d.font.get() {
                     Some(font) => Geometry::Meshes(text.mesh(style, font).into_iter().collect(), "Text"),
                     None => Geometry::Skipped("texts (no font to set them in)"),
                 }
@@ -1111,14 +1288,14 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
     }
     if dimensions::V2_ANNOTATIONS.contains(&class) {
         let style = d.document_style.clone().unwrap_or_default();
-        return Ok(match dimensions::read_v2(&mut c, &style, d.font.unwrap_or(&[]), d.meters) {
+        return Ok(match dimensions::read_v2(&mut c, &style, d.font.get().unwrap_or(&[]), d.meters) {
             Ok(drawing) if drawing.kind == "Text" => Geometry::Meshes(drawing.meshes, "Text"),
             Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
             Err(_) => Geometry::Skipped("Rhino 2 annotations that could not be read"),
         });
     }
     if dimensions::V5_ANNOTATIONS.contains(&class) {
-        return Ok(match dimensions::read_v5(&mut c, &d.dim_styles, d.font.unwrap_or(&[]), d.meters) {
+        return Ok(match dimensions::read_v5(&mut c, &d.dim_styles, d.font.get().unwrap_or(&[]), d.meters) {
             Ok(drawing) if drawing.kind == "Text" => Geometry::Meshes(drawing.meshes, "Text"),
             Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
             Err(_) => Geometry::Skipped("Rhino 5 annotations that could not be read"),
@@ -1131,7 +1308,7 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize,
         });
     }
     if dimensions::is_annotation(class) {
-        return Ok(match dimensions::read(class, &mut c, &d.dim_styles, d.font.unwrap_or(&[]), d.meters) {
+        return Ok(match dimensions::read(class, &mut c, &d.dim_styles, d.font.get().unwrap_or(&[]), d.meters) {
             Ok(drawing) => Geometry::Drawing { lines: drawing.lines, meshes: drawing.meshes, kind: drawing.kind },
             Err(_) => Geometry::Skipped("dimensions and leaders that could not be read"),
         });
@@ -1271,56 +1448,13 @@ fn read_group(mut c: Cur<'_>) -> R<(i32, String)> {
     Ok((c.i32()?, c.wstring()?))
 }
 
-const TCODE_LINETYPE_TABLE: u32 = 0x1000_0023;
-const TCODE_LINETYPE_RECORD: u32 = 0x2000_8078;
-const ON_LINETYPE: Uuid = Uuid::parse("26F10A24-7D13-4f05-8FDA-8E364DAF8EA6");
-
-/// `ON_Linetype::Read`: its index and its segments, dashes as positive lengths and gaps as
-/// negative ones. `position` is its place in the table, for files that store no index.
-fn read_linetype(mut c: Cur<'_>, position: i32) -> R<(i32, Vec<f64>)> {
-    let (mut b, major, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
-    let mut index = position;
-    match major {
-        1 => {
-            index = b.i32()?;
-            b.wstring()?; // name
-        }
-        2 => {
-            // ReadModelComponentAttributes: each attribute after a byte saying it is there
-            let (mut a, _, _) = b.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK)?;
-            if a.u8()? == 1 {
-                a.take(12)?; // serial numbers
-            }
-            if a.u8()? == 1 {
-                a.uuid()?; // id
-            }
-            if a.u8()? == 1 {
-                a.i32()?; // component type
-            }
-            if a.u8()? == 1 {
-                index = a.i32()?;
-            }
-        }
-        _ => return err("a linetype of an unknown version"),
-    }
-    let n = b.count(12)?;
-    let mut segments = Vec::with_capacity(n);
-    for _ in 0..n {
-        let length = b.f64()?;
-        let kind = b.u32()?;
-        let length = if length.is_finite() { length.abs() } else { 0.0 };
-        segments.push(if kind == 1 { -length } else { length });
-    }
-    Ok((index, segments))
-}
-
 /// At most this many dashes are made of one curve; beyond, it is drawn whole.
 const MAX_DASHES: usize = 100_000;
 
 /// Draws a curve in its linetype (by object, or by layer): its polylines cut into the
 /// linetype's dashes, half a first dash at each end as Rhino does. Dots (dashes of length 0)
 /// are a tenth of the pattern's smallest gap long.
-fn dash(object: &mut RhinoObject<'_>, layers: &[RhinoLayer], linetypes: &[(i32, Vec<f64>)]) {
+fn dash(object: &mut RhinoObject<'_>, layers: &[RhinoLayer], linetypes: &[Linetype]) {
     let Geometry::Lines(polylines, "Curve") = &object.geometry else { return };
     let a = &object.attributes;
     let index = match a.linetype_source {
@@ -1334,8 +1468,8 @@ fn dash(object: &mut RhinoObject<'_>, layers: &[RhinoLayer], linetypes: &[(i32, 
     let segments: Vec<f64> = match &a.custom_linetype {
         Some(own) => own.iter().map(|s| s * scale).collect(),
         None => {
-            let Some((_, segments)) = linetypes.iter().find(|(i, _)| *i == index) else { return };
-            segments.iter().map(|s| s * scale).collect()
+            let Some(lt) = linetypes.iter().find(|l| l.index == index) else { return };
+            lt.segments.iter().map(|s| s * scale).collect()
         }
     };
     let segments = &segments;
@@ -1715,7 +1849,7 @@ mod tests {
         let mut c = Cur { data: &bytes, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
         let object = c.object().unwrap().unwrap();
         assert_eq!(text_dot_text(object.data.clone()).unwrap(), [("Text".to_string(), "A1".to_string()), ("Secondary text".to_string(), "Grid A, 1".to_string())]);
-        let drafting = Drafting { linetypes: Vec::new(), patterns: Vec::new(), dim_styles: Vec::new(), font: None, meters: 0.001, document_style: None };
+        let drafting = Drafting { patterns: Vec::new(), dim_styles: Vec::new(), font: std::cell::Cell::new(None), default_font: None, resolve_font: None, meters: 0.001, document_style: None, fonts: Vec::new() };
         let Geometry::Points { points, kind, .. } = read_geometry(object, 0x2000, &mut 0, &drafting).unwrap() else { panic!("not a point") };
         assert_eq!((points, kind), (&f64s(&[1.0, 2.0, 3.0])[..], "Text dot"));
     }

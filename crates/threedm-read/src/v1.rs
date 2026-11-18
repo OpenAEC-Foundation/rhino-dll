@@ -67,7 +67,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     Err(_) => Geometry::Skipped("Rhino 1 meshes that could not be read"),
                 };
                 let (attributes, _) = read_attributes(&mut body, None);
-                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new() });
+                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None, font: None });
             }
             TCODE_RH_POINT => {
                 // a point, or by its extra data an arrow (a curve, as Rhino 9 converts it) or
@@ -88,7 +88,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     (Ok(points), None) => Geometry::Points { points, colors: None, kind: "Point" },
                     (Err(_), _) => Geometry::Skipped("Rhino 1 points that could not be read"),
                 };
-                file.objects.push(RhinoObject { geometry, attributes, user });
+                file.objects.push(RhinoObject { geometry, attributes, user, stroke: None, font: None });
             }
             TCODE_LEGACY_CRV => {
                 // its attributes, then the curve
@@ -97,7 +97,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     Some(Ok(points)) => Geometry::Lines(vec![points], "Curve"),
                     _ => Geometry::Skipped("Rhino 1 curves that could not be read"),
                 };
-                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new() });
+                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None, font: None });
             }
             TCODE_LEGACY_FAC | TCODE_LEGACY_SHL => {
                 // its attributes, then the face or the faces of the shell, meshed
@@ -116,7 +116,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
                     },
                     Err(_) => Geometry::Skipped("Rhino 1 surfaces that could not be read"),
                 };
-                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new() });
+                file.objects.push(RhinoObject { geometry, attributes, user: Vec::new(), stroke: None, font: None });
             }
             _ => {}
         }
@@ -135,7 +135,7 @@ pub(super) fn read<'a>(mut top: Cur<'a>, file: &mut File<'a>, vertices: &mut usi
 
 /// `Read3dmV1Layer`: its name, colour and state (1 hidden) in chunks.
 fn read_layer(mut c: Cur<'_>, index: i32) -> R<RhinoLayer> {
-    let mut layer = RhinoLayer { index, name: format!("Layer {index}"), id: Default::default(), parent: Default::default(), color: [0, 0, 0, 255], visible: true, material: -1, linetype: -1 };
+    let mut layer = RhinoLayer { index, name: format!("Layer {index}"), id: Default::default(), parent: Default::default(), color: [0, 0, 0, 255], visible: true, material: -1, linetype: -1, section_style: -1, ..RhinoLayer::default() };
     while c.left() > 0 {
         let chunk = c.chunk()?;
         match chunk.typecode {

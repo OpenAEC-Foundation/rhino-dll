@@ -11,14 +11,16 @@
 //! `threedm_query` takes a JSON request and returns a JSON answer, `{"ok": true, "result": …}` or
 //! `{"ok": false, "error": "…"}`; the caller frees it with `threedm_free`. Requests:
 //! - `{"query": "info"}`: the Rhino version, the application that saved the file, its units,
-//!   the number of layers, materials, bitmaps, blocks, lights and objects, the views (layouts
+//!   the number of layers, materials, bitmaps, blocks, lights and objects, the linetypes (with
+//!   their Rhino 8 width, cap, join and taper) and section styles, the views (layouts
 //!   with their `page`: paper in mm and page number) and the layouts alone, the objects by
 //!   kind, and the records that could not be read;
 //! - `{"query": "layers"}`, `{"query": "materials"}`, `{"query": "bitmaps"}`,
 //!   `{"query": "blocks"}`, `{"query": "lights"}`: the tables (materials with their colours,
 //!   textures and physically based parameters, embedded bitmaps by name, file and byte count);
 //! - `{"query": "objects", "limit": 10, "offset": 0}`: objects with their id, name, kind, layer,
-//!   attributes and user text, `{"total", "objects"}`;
+//!   attributes (section source, style and own style, clipping label) and user text, and of a
+//!   curve its `stroke` (linetype width, cap, join, taper, print width), `{"total", "objects"}`;
 //! - `{"query": "object", "id": "…"}`: one object by its id, with its geometry: meshes
 //!   (`positions`, triangle `indices`, optional `normals`, `texture_coordinates` and `colors`),
 //!   `polylines`, `points` or the block `definition` and `xform` (column-major 4×4) of an instance,
@@ -27,18 +29,37 @@
 //!   the layout's id as `viewport`; with its `plugin_data` (user data of its geometry and
 //!   attributes) and, of a cage, morph control or curve along edges, its `cage`, `morph_control`
 //!   or `poly_edge` segments;
-//! - `{"query": "plugins"}`: the file's plug-in list, its user tables (plug-in document data) and
-//!   document user text;
+//! - `{"query": "plugins"}`: the file's plug-in list, its user tables (plug-in document data, with
+//!   what is decoded of them; with `"bytes": true` their bytes as base64) and document user text;
 //! - `{"query": "plugin_data", "bytes": true}`: every user data entry of objects and table
 //!   records with its owner, class, plug-in (and its name), item, version, copy count,
 //!   transform, goo flag, versions, length and what is decoded of it (user text, dictionaries
 //!   with typed values, XML or JSON text); with `"bytes": true` also the bytes as base64.
+//!   the layout's id as `viewport`; a text, dimension or leader has its `font` (family, face,
+//!   weight, bold, italic: of its first character);
+//! - `{"query": "settings"}`: the document settings: earth anchor point, model base point and
+//!   URL, named and view construction planes, render, analysis and custom mesh settings, grid
+//!   defaults, render settings, the current table entries, the plug-ins; the document user
+//!   text, named layer states, snapshots, dimension styles with their fonts, the font table and
+//!   the plug-in tables (by plug-in, with their size);
+//! - `{"query": "history"}`: the history records: command, version, the objects they were made
+//!   from and made, their values by id and type;
+//! - `{"query": "render_content"}`: the render materials, environments and textures of the RDK
+//!   document with their parameters (each followed by the content in its child slots); `info`
+//!   has the render settings (`render`: background, environments, ground plane, sun, skylight,
+//!   ..) and objects their `render_material` (the id of the render content their material
+//!   simulates), `decals` and `mesh_modifiers`.
 
 use std::ffi::{c_char, CStr, CString};
 
+mod settings;
+
 use serde_json::{json, Value};
 use threedm_read::plugins::entry_type;
-use threedm_read::{Decoded, Dictionary, Document, File, Geometry, Light, LightKind, Material, Mesh, NurbsCage, Owner, PlugInData, RhinoObject, Value as DataValue};
+use threedm_read::{Decoded, Dictionary, NurbsCage, Owner, PlugInData, Value as DataValue};
+use threedm_read::{Document, File, Geometry, Light, LightKind, LineCap, LineJoin, Linetype, Material, Mesh, RhinoObject, SectionStyle, Stroke};
+
+mod render;
 
 /// An open document behind the C ABI.
 pub struct ThreedmDocument(Document);
@@ -64,7 +85,7 @@ fn kind(o: &RhinoObject<'_>) -> String {
     }
 }
 
-fn object_summary(o: &RhinoObject<'_>) -> Value {
+fn object_summary(file: &File<'_>, o: &RhinoObject<'_>) -> Value {
     let a = &o.attributes;
     let user: serde_json::Map<String, Value> = o.user.iter().map(|(k, v)| (k.clone(), Value::from(v.as_str()))).collect();
     json!({
@@ -87,8 +108,62 @@ fn object_summary(o: &RhinoObject<'_>) -> Value {
         "linetype_scale": a.linetype_scale,
         "custom_linetype": a.custom_linetype,
         "hatch_background": a.hatch_background,
+        "font": o.font.as_ref().map(settings::font_json),
         "hatch_boundary": a.hatch_boundary,
+        "custom_linetype_style": a.custom_linetype_style.as_ref().map(linetype_json),
+        "section_source": a.section_source,
+        "section_style": a.section_style,
+        "custom_section_style": a.custom_section_style.as_ref().map(section_style_json),
+        "clipping_label": a.clipping_label,
+        "stroke": o.stroke.as_ref().map(stroke_json),
         "user_text": user,
+        "render_material": file.render_material(file.object_material(o)).map(|c| c.id.to_string()),
+        "decals": a.decals.iter().map(render::decal).collect::<Vec<_>>(),
+        "mesh_modifiers": render::modifiers(&a.mesh_modifiers),
+    })
+}
+
+fn cap(c: LineCap) -> &'static str {
+    match c {
+        LineCap::Round => "round",
+        LineCap::Flat => "flat",
+        LineCap::Square => "square",
+    }
+}
+
+fn join(j: LineJoin) -> &'static str {
+    match j {
+        LineJoin::Round => "round",
+        LineJoin::Miter => "miter",
+        LineJoin::Bevel => "bevel",
+    }
+}
+
+fn linetype_json(l: &Linetype) -> Value {
+    json!({
+        "index": l.index, "id": l.id.to_string(), "name": l.name, "segments": l.segments,
+        "width": l.width, "width_unit": l.width_unit, "cap": cap(l.cap), "join": join(l.join),
+        "taper": l.taper, "always_model_distances": l.always_model_distances,
+    })
+}
+
+fn stroke_json(s: &Stroke) -> Value {
+    json!({
+        "linetype": s.linetype, "width": s.width, "width_unit": s.width_unit, "model_width": s.model_width,
+        "cap": cap(s.cap), "join": join(s.join), "taper": s.taper, "print_width": s.print_width, "print_color": s.print_color,
+    })
+}
+
+fn section_style_json(s: &SectionStyle) -> Value {
+    json!({
+        "index": s.index, "id": s.id.to_string(), "name": s.name,
+        "background_fill_mode": s.background_fill_mode, "background_fill_color": s.background_fill_color,
+        "background_fill_print_color": s.background_fill_print_color,
+        "boundary_visible": s.boundary_visible, "boundary_color": s.boundary_color, "boundary_print_color": s.boundary_print_color,
+        "boundary_width_scale": s.boundary_width_scale, "boundary_print_width": s.boundary_print_width,
+        "boundary_linetype_index": s.boundary_linetype_index, "boundary_linetype": s.boundary_linetype.as_ref().map(linetype_json),
+        "fill_rule": s.fill_rule, "hatch_index": s.hatch_index, "hatch_scale": s.hatch_scale, "hatch_rotation": s.hatch_rotation,
+        "hatch_color": s.hatch_color, "hatch_print_color": s.hatch_print_color, "hatch_print_width": s.hatch_print_width,
     })
 }
 
@@ -198,7 +273,8 @@ fn material_json(m: &Material) -> Value {
         })
     });
     json!({
-        "index": m.index, "name": m.name,
+        "index": m.index, "name": m.name, "id": m.id.to_string(), "plug_in": m.plug_in.to_string(),
+        "render_material": (!m.render_material.is_nil()).then(|| m.render_material.to_string()),
         "ambient": m.ambient, "diffuse": m.diffuse, "emission": m.emission, "specular": m.specular,
         "reflection": m.reflection, "transparent": m.transparent,
         "shine": m.shine, "reflectivity": m.reflectivity, "index_of_refraction": m.index_of_refraction,
@@ -301,16 +377,30 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "named_views": file.named_views.iter().map(view_json).collect::<Vec<_>>(),
                 "layouts": file.views.iter().filter(|v| v.page.is_some()).map(view_json).collect::<Vec<_>>(),
                 "groups": file.groups.iter().map(|(i, n)| json!({"index": i, "name": n})).collect::<Vec<_>>(),
+                "linetypes": file.linetypes.iter().map(linetype_json).collect::<Vec<_>>(),
+                "section_styles": file.section_styles.iter().map(section_style_json).collect::<Vec<_>>(),
                 "kinds": kinds,
                 "plugin_data": file.plugin_data.len(),
                 "user_tables": file.user_tables.len(),
+                "earth_anchor": file.settings.earth_anchor.as_ref().map(|e| json!({"latitude": e.latitude, "longitude": e.longitude, "elevation": e.elevation, "name": e.name})),
+                "model_basepoint": file.settings.model_basepoint.to_array(),
+                "dim_styles": settings::dim_styles_json(file),
+                "history_records": file.history.len(),
+                "render": render::settings(&file.render),
+                "render_content": file.render_content.len(),
                 "damaged": file.damaged,
             }))
         }
         "layers" => Ok(file
             .layers
             .iter()
-            .map(|l| json!({"index": l.index, "name": l.name, "id": l.id.to_string(), "parent": l.parent.to_string(), "color": l.color, "visible": l.visible, "material": l.material}))
+            .map(|l| {
+                json!({
+                    "index": l.index, "name": l.name, "id": l.id.to_string(), "parent": l.parent.to_string(), "color": l.color, "visible": l.visible,
+                    "material": l.material, "linetype": l.linetype, "plot_color": l.plot_color, "plot_weight": l.plot_weight,
+                    "section_style": l.section_style, "custom_section_style": l.custom_section_style.as_ref().map(section_style_json),
+                })
+            })
             .collect()),
         "materials" => Ok(file.materials.iter().map(material_json).collect()),
         "bitmaps" => Ok(file.bitmaps.iter().map(|b| json!({"name": b.name, "file": b.file, "bytes": b.data.as_ref().map(Vec::len)})).collect()),
@@ -320,10 +410,13 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             .map(|b| json!({"id": b.id.to_string(), "name": b.name, "objects": b.objects.iter().map(|o| o.to_string()).collect::<Vec<_>>()}))
             .collect()),
         "lights" => Ok(file.lights.iter().map(light_json).collect()),
+        "settings" => Ok(settings::settings_json(file)),
+        "history" => Ok(file.history.iter().map(settings::history_json).collect()),
+        "render_content" => Ok(file.render_content.iter().map(render::content).collect()),
         "objects" => {
             let limit = req.get("limit").and_then(Value::as_u64).map_or(usize::MAX, |n| n as usize);
             let offset = req.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let objects: Vec<Value> = file.objects.iter().skip(offset).take(limit).map(object_summary).collect();
+            let objects: Vec<Value> = file.objects.iter().skip(offset).take(limit).map(|o| object_summary(file, o)).collect();
             Ok(json!({"total": file.objects.len(), "objects": objects}))
         }
         "object" => {
@@ -331,7 +424,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             let o = file.objects.iter().find(|o| o.attributes.id.to_string().eq_ignore_ascii_case(id)).ok_or_else(|| format!("no object {id}"))?;
             let index = file.objects.iter().position(|x| std::ptr::eq(x, o)).unwrap_or(usize::MAX);
             let bytes = req.get("bytes").and_then(Value::as_bool).unwrap_or(false);
-            let mut v = object_summary(o);
+            let mut v = object_summary(file, o);
             v["geometry"] = geometry_json(&o.geometry);
             v["plugin_data"] = file.plugin_data.iter().filter(|d| matches!(d.owner, Owner::Object { index: i, .. } if i == index)).map(|d| plugin_data_json(d, bytes)).collect();
             if let Some((_, c)) = file.cages.iter().find(|(i, _)| *i == index) {
@@ -364,15 +457,15 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 .user_tables
                 .iter()
                 .map(|t| {
-                    let mut v = json!({"plugin": t.plugin.to_string(), "plugin_name": t.plugin_name, "goo": t.goo, "archive_version": t.archive, "opennurbs_version": t.opennurbs, "length": t.bytes.len(), "decoded": decoded_json(&t.decoded)});
+                    let mut v = json!({"plugin": t.plugin.to_string(), "name": t.name, "goo": t.goo, "archive_version": t.archive_version, "opennurbs_version": t.opennurbs_version, "length": t.data.len(), "decoded": decoded_json(&t.decoded)});
                     if bytes {
-                        v["bytes"] = json!(base64(t.bytes));
+                        v["bytes"] = json!(base64(t.data));
                     }
                     v
                 })
                 .collect();
             Ok(json!({
-                "plugins": file.plugins.iter().map(|p| json!({"id": p.id.to_string(), "name": p.name, "version": p.version, "file": p.file, "kind": p.kind, "organization": p.organization, "website": p.website, "email": p.email})).collect::<Vec<_>>(),
+                "plugins": file.settings.plugins.iter().map(settings::plugin_json).collect::<Vec<_>>(),
                 "user_tables": tables,
                 "document_user_text": file.document_user_text.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
             }))
@@ -381,7 +474,7 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
             let bytes = req.get("bytes").and_then(Value::as_bool).unwrap_or(false);
             Ok(file.plugin_data.iter().map(|d| plugin_data_json(d, bytes)).collect())
         }
-        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object, plugins, plugin_data)")),
+        other => Err(format!("unknown query {other:?} (info, layers, materials, bitmaps, blocks, lights, objects, object, settings, history, render_content, plugins, plugin_data)")),
     }
 }
 

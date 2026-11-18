@@ -7,8 +7,13 @@ use glam::{DMat4, DVec3};
 use std::collections::BTreeMap;
 pub use threedm_core::{Uuid, Versions};
 
+mod settings;
+pub use settings::*;
+mod render;
+pub use render::*;
+
 /// A layer (`ON_Layer`); its full path follows the parents by id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Layer {
     /// The index objects refer to.
     pub index: i32,
@@ -20,6 +25,147 @@ pub struct Layer {
     pub material: i32,
     /// The index of its linetype (`-1` continuous).
     pub linetype: i32,
+    /// Print colour (unset in the file: its colour) and width (millimetres; 0 the default,
+    /// negative no print).
+    pub plot_color: [u8; 4],
+    pub plot_weight: f64,
+    /// The section style of the section style table its objects are cut with (Rhino 9), by
+    /// index; `-1` none.
+    pub section_style: i32,
+    /// Its own section style (Rhino 8), over the table's.
+    pub custom_section_style: Option<SectionStyle>,
+}
+
+/// How the ends of a wide line are drawn (`ON::LineCapStyle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineCap {
+    #[default]
+    Round,
+    Flat,
+    Square,
+}
+
+/// How the corners of a wide line are drawn (`ON::LineJoinStyle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineJoin {
+    #[default]
+    Round,
+    Miter,
+    Bevel,
+}
+
+/// A linetype (`ON_Linetype`) of the linetype table, or an object's own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Linetype {
+    /// The index objects and layers refer to.
+    pub index: i32,
+    pub id: Uuid,
+    pub name: String,
+    /// Dashes as positive lengths and gaps as negative ones.
+    pub segments: Vec<f64>,
+    /// Rhino 8: how wide its lines are drawn, in `width_unit` (`ON::LengthUnitSystem`: 0 none,
+    /// 2 millimetres, 3 centimetres, 4 metres, 8 inches, ..).
+    pub width: f64,
+    pub width_unit: u8,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    /// A tapered width: points (position along the curve from 0 to 1, width).
+    pub taper: Vec<[f64; 2]>,
+    /// Its pattern is in model distances also on layouts and in details.
+    pub always_model_distances: bool,
+}
+
+impl Default for Linetype {
+    fn default() -> Self {
+        Linetype { index: -1, id: Uuid::default(), name: String::new(), segments: Vec::new(), width: 1.0, width_unit: 0, cap: LineCap::Round, join: LineJoin::Round, taper: Vec::new(), always_model_distances: false }
+    }
+}
+
+/// How a curve's line is drawn wide: its linetype's width, ends, corners and taper, and its
+/// print width and colour (from the object or its layer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stroke {
+    /// The linetype it comes from by index; `-1` the object's own linetype or continuous.
+    pub linetype: i32,
+    /// The width as the linetype gives it, in `width_unit` (`ON::LengthUnitSystem`, 0 none).
+    pub width: f64,
+    pub width_unit: u8,
+    /// The width in model units, when `width_unit` is a length.
+    pub model_width: Option<f64>,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    /// Points (position along the curve from 0 to 1, width in `width_unit`).
+    pub taper: Vec<[f64; 2]>,
+    /// Print width in millimetres (0 the default, negative no print) and print colour.
+    pub print_width: f64,
+    pub print_color: [u8; 4],
+}
+
+/// A section style (`ON_SectionStyle`): how the cut of an object by a clipping plane is drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionStyle {
+    /// Its index in the section style table (Rhino 9); `-1` an object's or layer's own.
+    pub index: i32,
+    pub id: Uuid,
+    pub name: String,
+    /// 0 no background fill, 1 as the viewport draws the object, 2 a solid colour.
+    pub background_fill_mode: u8,
+    /// Colours as `ON_Color` (alpha 0 opaque); [`UNSET_COLOR`]: the object's own.
+    pub background_fill_color: [u8; 4],
+    pub background_fill_print_color: [u8; 4],
+    pub boundary_visible: bool,
+    pub boundary_color: [u8; 4],
+    pub boundary_print_color: [u8; 4],
+    /// The boundary's width as a multiple of the object's.
+    pub boundary_width_scale: f64,
+    /// 0 closed curves are filled, 1 only the cuts of solid objects.
+    pub fill_rule: u8,
+    /// The hatch pattern (index) the cut is hatched with, [`UNSET_INDEX`] none; its scale,
+    /// rotation (radians) and colours.
+    pub hatch_index: i32,
+    pub hatch_scale: f64,
+    pub hatch_rotation: f64,
+    pub hatch_color: [u8; 4],
+    pub hatch_print_color: [u8; 4],
+    /// The boundary's own linetype, when it has one.
+    pub boundary_linetype: Option<Linetype>,
+    /// Rhino 9: the boundary's linetype by index ([`UNSET_INDEX`] none), and the print widths
+    /// (millimetres, -10 unset) of boundary and hatch.
+    pub boundary_linetype_index: i32,
+    pub boundary_print_width: f64,
+    pub hatch_print_width: f64,
+}
+
+/// `ON_Color::UnsetColor`.
+pub const UNSET_COLOR: [u8; 4] = [255; 4];
+/// `ON_UNSET_INT_INDEX`.
+pub const UNSET_INDEX: i32 = i32::MIN + 1;
+
+impl Default for SectionStyle {
+    fn default() -> Self {
+        SectionStyle {
+            index: -1,
+            id: Uuid::default(),
+            name: String::new(),
+            background_fill_mode: 1,
+            background_fill_color: UNSET_COLOR,
+            background_fill_print_color: UNSET_COLOR,
+            boundary_visible: true,
+            boundary_color: UNSET_COLOR,
+            boundary_print_color: UNSET_COLOR,
+            boundary_width_scale: 3.0,
+            fill_rule: 0,
+            hatch_index: UNSET_INDEX,
+            hatch_scale: 1.0,
+            hatch_rotation: 0.0,
+            hatch_color: UNSET_COLOR,
+            hatch_print_color: UNSET_COLOR,
+            boundary_linetype: None,
+            boundary_linetype_index: UNSET_INDEX,
+            boundary_print_width: -10.0,
+            hatch_print_width: -10.0,
+        }
+    }
 }
 
 /// A material (`ON_Material`): its colours, shine, reflectivity, index of refraction and
@@ -28,6 +174,11 @@ pub struct Layer {
 pub struct Material {
     pub index: i32,
     pub name: String,
+    pub id: Uuid,
+    /// The plug-in it belongs to (the RDK's for materials made by render content).
+    pub plug_in: Uuid,
+    /// The render content it simulates ([`RenderContent::id`]), nil if none.
+    pub render_material: Uuid,
     pub ambient: [u8; 4],
     pub diffuse: [u8; 4],
     pub emission: [u8; 4],
@@ -159,6 +310,20 @@ pub struct Attributes {
     /// A hatch's background fill colour, and whether its boundary is drawn (Rhino 8).
     pub hatch_background: Option<[u8; 4]>,
     pub hatch_boundary: bool,
+    /// The object's own linetype (Rhino 8) in full: with its width, cap, join and taper.
+    pub custom_linetype_style: Option<Linetype>,
+    /// Where its section style comes from: 0 by layer, 1 by object, 2 by parent, 3 from the
+    /// clipping plane that cuts it.
+    pub section_source: u8,
+    /// Its section style of the table (Rhino 9) by index, `-1` none, and its own (Rhino 8).
+    pub section_style: i32,
+    pub custom_section_style: Option<SectionStyle>,
+    /// A clipping plane's label: 0 none, 1 a text dot of its name, 2 a text of its name.
+    pub clipping_label: u8,
+    /// Its decals.
+    pub decals: Vec<Decal>,
+    /// Its mesh modifiers (only read: its meshes are as stored).
+    pub mesh_modifiers: MeshModifiers,
 }
 
 impl Default for Attributes {
@@ -188,6 +353,13 @@ impl Default for Attributes {
             display_order: 0,
             hatch_background: None,
             hatch_boundary: false,
+            custom_linetype_style: None,
+            section_source: 0,
+            section_style: -1,
+            custom_section_style: None,
+            clipping_label: 0,
+            decals: Vec::new(),
+            mesh_modifiers: MeshModifiers::default(),
         }
     }
 }
@@ -361,6 +533,11 @@ pub struct Object<'a> {
     pub geometry: Geometry<'a>,
     pub attributes: Attributes,
     pub user: Vec<(String, String)>,
+    /// Of a curve: how its line is drawn wide (its linetype's width, cap and join, its print
+    /// width).
+    pub stroke: Option<Stroke>,
+    /// The font of a text, dimension or leader: of its first character as Rhino gives it.
+    pub font: Option<Font>,
 }
 
 /// A Rhino file as read.
@@ -376,6 +553,10 @@ pub struct File<'a> {
     pub page_meters: f64,
     pub page_unit: &'static str,
     pub layers: Vec<Layer>,
+    /// The linetype table.
+    pub linetypes: Vec<Linetype>,
+    /// The section style table (Rhino 9).
+    pub section_styles: Vec<SectionStyle>,
     pub materials: Vec<Material>,
     /// The bitmap table: images embedded in the file.
     pub bitmaps: Vec<Bitmap>,
@@ -389,16 +570,31 @@ pub struct File<'a> {
     pub groups: Vec<(i32, String)>,
     /// The lights of the light table (and of the object table, where old files keep them).
     pub lights: Vec<Light>,
+    /// The document settings: earth anchor, construction planes, mesh, grid and render
+    /// settings, the current table entries, the plug-ins.
+    pub settings: Settings,
+    /// The dimension styles with their fonts.
+    pub dim_styles: Vec<DimensionStyle>,
+    /// The font table of Rhino 4 and 5 files (`ON_TextStyle`), by index.
+    pub fonts: Vec<(i32, Font)>,
+    /// The history records (`ON_HistoryRecord`).
+    pub history: Vec<HistoryRecord>,
+    /// The tables plug-ins saved, as stored; those read below are among them.
+    pub user_tables: Vec<UserTable<'a>>,
+    /// The document's user text (Rhino's `SetDocumentUserText`), key and value.
+    pub document_user_text: Vec<(String, String)>,
+    /// The named layer states, and the snapshots.
+    pub layer_states: Vec<LayerState>,
+    pub snapshots: Vec<Snapshot>,
+    /// The render settings, with the rendering parts of the RDK document.
+    pub render: RenderSettings,
+    /// The render content of the RDK document: materials, environments and textures, each
+    /// followed by the content in its child slots.
+    pub render_content: Vec<RenderContent>,
     /// Records that could not be read, by table.
     pub damaged: BTreeMap<&'static str, usize>,
     /// The user data of objects and table records, every entry as stored.
     pub plugin_data: Vec<PlugInData<'a>>,
-    /// The document's user tables (plug-in document data), as stored.
-    pub user_tables: Vec<UserTable<'a>>,
-    /// The document's user text (`ON_DocumentUserStringList`, Rhino's `doc.Strings`).
-    pub document_user_text: Vec<(String, String)>,
-    /// The plug-ins the file names (`TCODE_SETTINGS_PLUGINLIST`).
-    pub plugins: Vec<PlugIn>,
     /// The NURBS volumes of cage objects (`ON_NurbsCage`), by their object's place in
     /// [`File::objects`].
     pub cages: Vec<(usize, NurbsCage)>,
@@ -420,7 +616,7 @@ pub enum Owner {
 }
 
 /// A user data entry (`ON_UserData`) as stored, with what is known of it: the plug-in that
-/// wrote it (named when the file's plug-in list names it) and, when its form is known, its
+/// wrote it (named when the file's plug-in list, [`Settings::plugins`], names it) and, when its form is known, its
 /// content ([`Decoded`]).
 #[derive(Debug, Clone)]
 pub struct PlugInData<'a> {
@@ -445,37 +641,6 @@ pub struct PlugInData<'a> {
     /// The bytes as stored (the content of its anonymous chunk).
     pub bytes: &'a [u8],
     pub decoded: Option<Decoded>,
-}
-
-/// A user table of the document (`TCODE_USER_TABLE`): a plug-in's document data, as stored.
-#[derive(Debug, Clone)]
-pub struct UserTable<'a> {
-    pub plugin: Uuid,
-    pub plugin_name: String,
-    /// Saved by a program that did not know the plug-in, and the versions it was written with
-    /// (0 when the file does not say).
-    pub goo: bool,
-    pub archive: i32,
-    pub opennurbs: u32,
-    /// The content of its `TCODE_USER_RECORD` chunk.
-    pub bytes: &'a [u8],
-    pub decoded: Option<Decoded>,
-}
-
-/// A plug-in of the file's plug-in list (`ON_PlugInRef`): the plug-ins that may have saved data
-/// in it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct PlugIn {
-    pub id: Uuid,
-    pub name: String,
-    pub version: String,
-    pub file: String,
-    /// `ON::plugin_type`: 1 render, 2 file import, 3 file export, 4 digitizer, 5 utility,
-    /// 6 display pipeline, 7 display engine.
-    pub kind: i32,
-    pub organization: String,
-    pub website: String,
-    pub email: String,
 }
 
 /// The content of plug-in data whose form is known.

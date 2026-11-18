@@ -29,14 +29,23 @@ objects and table records, user tables, document user text, the plug-in list), t
 parameters of cages and morph controls, and the records that could not be read by table. Each `Object` has its `Attributes` (id, name, layer, material, colour and their
 sources, visibility, mode and space), its user text and its `Geometry`: `Meshes` (with the
 object type to show), `Lines` (polylines), `Points` (borrowed from the file, read when used),
+`Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions,
+leaders, and hatches with a background fill or boundary), `ClippingPlane` or `Skipped` (with the reason). `File.views` are the viewports of
+its views, the active one first. `File.linetypes` and `File.section_styles` are the linetype
+and section style tables; a curve's `Object.stroke` is how its line is drawn wide.
 `Instance` (block definition and transform), `Drawing` (lines and meshes together: dimensions
 and leaders), `ClippingPlane` or `Skipped` (with the reason). `File.views` are the viewports of
-its views, the active one first.
+its views, the active one first. A text, dimension or leader has its `Font` (of its first
+character). `File.settings` holds the document settings (`Settings`: earth anchor point, model
+base point and URL, construction planes, mesh, grid and render settings, current entries,
+plug-ins); beside it the dimension styles with their fonts, the font table, the history
+records, the plug-in tables as stored, the document user text, layer states and snapshots.
 
 ## threedm-read: from tables to geometry
 
 `read` walks the tables (properties, settings, materials, layers, block definitions, dimension
-styles, hatch patterns, objects); a damaged record is counted and skipped. Objects:
+styles, fonts, hatch patterns, objects, history records, user tables); a damaged record is
+counted and skipped. Objects:
 
 - meshes as stored (`ON_Mesh`, compressed or not);
 - polysurfaces, surfaces and extrusions by the render meshes Rhino keeps with them, else by a
@@ -59,6 +68,16 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   annotation's plane and their dimension style (read in full: sizes, formats, arrowheads, landing,
   text location, length display): extension lines, dimension lines and arcs, arrowheads, the
   value set in the font; one `Geometry::Drawing` of lines and meshes per object;
+- linetypes and section styles (`styles`): `ON_Linetype` with its Rhino 8 items (cap, join,
+  width and its unit, taper, always model distances), `ON_SectionStyle` (background fill, boundary,
+  width scale, fill rule, hatch, the boundary's linetype; Rhino 9's print widths and boundary
+  linetype index, items 12 to 14) in the section style table of Rhino 9 (`0x10000027`, records
+  `0x2000807C`), as the own style of an object (attribute items 29 to 32, 37 and 39) or a layer
+  (layer items 29 to 32 and 35) and by index (Rhino 9: attribute item 43, layer item 39), with
+  the section source and a clipping plane's label (item 40). A curve's `stroke` resolves its
+  linetype (by object or layer, or its own) and print width and colour (by object or layer);
+  a hatch's background fill (attribute item 34) becomes a mesh of that colour behind its
+  pattern's lines and its boundary (item 35) closed polylines, in one `Geometry::Drawing`;
 - point clouds, points and block instances as they are;
 - clipping planes (`ON_ClippingPlaneSurface`): the rectangle of their plane surface, the plane
   (its normal points to the side cut away), enabled, the viewports they clip, their depth and
@@ -66,6 +85,34 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
   file's views (`TCODE_SETTINGS_VIEW_LIST`: id, name, perspective; the active one first) to match
   them with.
 
+Beside the objects:
+
+- the settings (`settings`): every chunk `ON_3dmSettings::Read` handles besides the units,
+  views and annotation settings: the plug-in list, render and analysis mesh settings, named
+  construction planes (and those of the view list's views, by viewport id), the current
+  layer, material, colour and wire density, render settings (Rhino 5's layout and Rhino 6's),
+  grid defaults, the model URL and the settings attributes (linetype scale, current plot colour
+  and linetype, active view, model base point, earth anchor point, IO settings, custom render
+  mesh settings, current entries by id); the history record table (`ON_HistoryRecord` and its
+  `ON_Value`s; geometry values kept as bytes); the user tables (`TCODE_USER_TABLE`) as stored,
+  and of them the document user text (`ON_DocumentUserStringList`), the named layer states
+  (Rhino Bonus Tools' table: each state's layers as `ON_Layer`) and the snapshots (the
+  Snapshots plug-in's XML, by name);
+- fonts (`fonts`): `ON_Font` of the dimension styles, the font table of Rhino 4 and 5
+  (`ON_TextStyle`), and the font of a text, dimension or leader: its rich text's font table and
+  the `\f`, `\b` and `\i` in force at its first character, else its own style's or its
+  dimension style's font.
+Rendering (`render`, with the small XML reader `xml`): `TCODE_SETTINGS_RENDER`
+(`ON_3dmRenderSettings`, the Rhino 2 to 5 list or the Rhino 6 chunk); the user table of the RDK
+plug-in, an XML document (`render-content-manager-document`) of the environments, ground plane,
+sun, skylight, linear workflow, dithering, safe frame, post effects and render channels, and the
+render content (`material-section`, `environment-section`, `texture-section`: each content's
+properties, its parameters (the V8 section, else the older one), its simulation and the content
+in its child slots). The sun's position at a date and place is computed as openNURBS does
+(`ON_SunEngine`), its colour from its altitude. Materials keep the id of the render content they
+simulate; `File::render_material` and `File::object_material` link objects and layers to it. Of
+objects the XML user data: decals (`ON_RdkUserData`) and mesh modifiers (displacement, edge
+softening, thickening, curve piping, shut lining), on `Attributes`; the meshes stay as stored.
 - cages (`ON_NurbsCage`, `rare`): their control net as lines and their six faces as NURBS
   surfaces meshed as other surfaces are; morph controls (`ON_MorphControl`): their curve,
   surface or cage as lines, with their parameters (kind, start, cage transform, captives,
@@ -77,9 +124,9 @@ styles, hatch patterns, objects); a damaged record is counted and skipped. Objec
 - plug-in data (`plugins`): every user data entry of objects (geometry and attributes) and of
   table records that are objects (layers, materials, ..) with its header (class, plug-in, item,
   version, copy count, transform, goo flag, versions) and its bytes as stored, in
-  `File::plugin_data` by owner; the user tables of the document (`TCODE_USER_TABLE`: plug-in,
-  goo flag, versions, record bytes) and the document user text; the plug-in list
-  (`TCODE_SETTINGS_PLUGINLIST`) to name the plug-ins. Decoded where the form is generic: user
+  `File::plugin_data` by owner, named by the settings' plug-in list; of the user tables read
+  with the settings it decodes what is generic (`UserTable::decoded`). Decoded where the form
+  is generic: user
   text (`ON_UserStringList`), archivable dictionaries (RhinoCommon's `UserDictionary`,
   `ON_ArchivableDictionary`: keys and typed values, nested dictionaries and arrays; a type not
   known is kept as its bytes) and XML or JSON text (the render content of Rhino's RDK).

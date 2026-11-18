@@ -1,21 +1,14 @@
 //! Plug-in data: the user data of objects and table records (`ON_UserData`, every entry kept
 //! as stored with its header), the document's user tables (`TCODE_USER_TABLE`), the document
 //! user text (`ON_DocumentUserStringList`) and the file's plug-in list
-//! (`TCODE_SETTINGS_PLUGINLIST`) that names the plug-ins. What has a generic, self-describing
+//! (read with the settings) that names the plug-ins. The user tables themselves are read by
+//! `settings`; this decodes what of them is generic. What has a generic, self-describing
 //! form is decoded: user text (`ON_UserStringList`), archivable dictionaries (RhinoCommon's
 //! `UserDictionary`, `ON_ArchivableDictionary`) and XML or JSON text.
 
 use threedm_core::*;
-use threedm_model::{Decoded, Dictionary, Entry, Owner, PlugIn, PlugInData, UserTable, Value};
+use threedm_model::{Decoded, Dictionary, Entry, Owner, PlugInData, UserTable, Value};
 
-/// `TCODE_SETTINGS_PLUGINLIST`: the plug-ins that may have saved data in the file.
-pub(crate) const TCODE_SETTINGS_PLUGINLIST: u32 = 0x2000_8135;
-/// `TCODE_USER_TABLE` and its chunks: the plug-in id (with, from openNURBS 2009-10-19, a header
-/// of goo flag and versions) and the plug-in's record.
-pub(crate) const TCODE_USER_TABLE: u32 = 0x1000_0017;
-const TCODE_USER_TABLE_UUID: u32 = 0x2000_8080;
-const TCODE_USER_TABLE_RECORD_HEADER: u32 = 0x2000_8082;
-const TCODE_USER_RECORD: u32 = 0x2000_0081;
 /// The archivable dictionary chunks (`BeginWriteDictionary`).
 const TCODE_DICTIONARY: u32 = 0x4000_8010;
 const TCODE_DICTIONARY_ID: u32 = 0x4000_8011;
@@ -25,82 +18,25 @@ const TCODE_DICTIONARY_END: u32 = 0xC000_0013;
 /// `ON_DocumentUserStringList`: the user table (by this plug-in id) of the document's user text.
 pub(crate) const ON_DOCUMENT_USER_STRING_LIST: Uuid = Uuid::parse("06F3218E-F5EC-4f6c-B74C-14583F0ED7BC");
 
-const MAX_PLUGINS: usize = 10_000;
 const MAX_DEPTH: usize = 16;
 
-/// The plug-in list of the settings table, as `ON_PlugInRef`s.
-pub(crate) fn plugin_list(mut settings: Cur<'_>) -> Vec<PlugIn> {
-    while settings.left() > 0 {
-        let Ok(chunk) = settings.chunk() else { break };
-        match chunk.typecode {
-            TCODE_ENDOFTABLE => break,
-            TCODE_SETTINGS_PLUGINLIST => return read_plugin_list(chunk.body).unwrap_or_default(),
-            _ => {}
-        }
-    }
-    Vec::new()
-}
-
-fn read_plugin_list(mut c: Cur<'_>) -> R<Vec<PlugIn>> {
-    let (major, _) = c.version()?;
-    if major != 1 {
-        return Ok(Vec::new());
-    }
-    // every reference is a chunk of at least 16 bytes
-    let count = c.count(16)?.min(MAX_PLUGINS);
-    let mut out = Vec::with_capacity(count);
-    for _ in 0..count {
-        let (mut r, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
-        if major != 1 {
-            continue;
-        }
-        let mut p = PlugIn { id: r.uuid()?, kind: r.i32()?, name: r.wstring()?, version: r.wstring()?, file: r.wstring()?, ..PlugIn::default() };
-        if minor >= 1 {
-            p.organization = r.wstring()?;
-            let _address = r.wstring()?;
-            let _country = r.wstring()?;
-            let _phone = r.wstring()?;
-            p.email = r.wstring()?;
-            p.website = r.wstring()?;
-        }
-        out.push(p);
-    }
-    Ok(out)
-}
-
-/// One `TCODE_USER_TABLE`: the plug-in id, the header when there is one, and the record.
-pub(crate) fn read_user_table(mut c: Cur<'_>) -> R<UserTable<'_>> {
-    let id = c.chunk()?;
-    if id.typecode != TCODE_USER_TABLE_UUID {
-        return err("a user table without its plug-in id");
-    }
-    let mut b = id.body;
-    let plugin = b.uuid()?;
-    let (mut goo, mut archive, mut opennurbs) = (false, 0, 0);
-    if b.left() > 0 && b.peek_typecode() == Some(TCODE_USER_TABLE_RECORD_HEADER) {
-        let (mut h, _, _) = b.versioned(TCODE_USER_TABLE_RECORD_HEADER)?;
-        goo = h.bool()?;
-        archive = h.i32()?;
-        opennurbs = h.u32()?;
-    }
-    let record = c.chunk()?;
-    if record.typecode != TCODE_USER_RECORD {
-        return err("a user table without its record");
-    }
-    let mut data = record.body;
-    // like user data: the chunk lengths of the archive it was written in
-    data.v.archive = match archive {
-        0 if c.v.archive >= 50 => 5,
-        0 => c.v.archive,
+/// Decodes a user table read by `settings::read_user_table` where its form is generic: the
+/// document user text (`ON_DocumentUserStringList`), a dictionary, XML or JSON text. Its data
+/// has the chunk lengths of the archive it was written in (Rhino 4's, when the file does not
+/// say and is newer).
+pub(crate) fn decode_user_table(t: &mut UserTable<'_>, file: Versions) {
+    let archive = match t.archive_version {
+        0 if file.archive >= 50 => 5,
+        0 => file.archive,
         a => a as u32,
     };
-    let decoded = if plugin == ON_DOCUMENT_USER_STRING_LIST {
+    let data = Cur { data: t.data, pos: 0, v: Versions { archive, opennurbs: file.opennurbs } };
+    t.decoded = if t.plugin == ON_DOCUMENT_USER_STRING_LIST {
         // `WriteObject` of an `ON_DocumentUserStringList`: its strings are its user data
         data.clone().object().ok().flatten().map(|o| Decoded::UserText(user_strings_of(&o.userdata)))
     } else {
-        decode(Uuid::default(), data.clone())
+        decode(Uuid::default(), data)
     };
-    Ok(UserTable { plugin, plugin_name: String::new(), goo, archive, opennurbs, bytes: &data.data[data.pos..], decoded })
 }
 
 /// Of an object record (`index` in the file's objects): the user data of its geometry and of
@@ -153,16 +89,13 @@ pub(crate) fn records<'a>(owner: Owner, entries: &[UserData<'a>]) -> Vec<PlugInD
     }).collect()
 }
 
-/// Names the plug-ins of the plug-in data and user tables from the file's plug-in list.
+/// Names the plug-ins of the plug-in data from the file's plug-in list.
 pub(crate) fn name_plugins(file: &mut threedm_model::File<'_>) {
-    let name = |id: Uuid| file.plugins.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
-    let names: Vec<String> = file.plugin_data.iter().map(|d| name(d.plugin)).collect();
-    let tables: Vec<String> = file.user_tables.iter().map(|t| name(t.plugin)).collect();
-    for (d, n) in file.plugin_data.iter_mut().zip(names) {
-        d.plugin_name = n;
-    }
-    for (t, n) in file.user_tables.iter_mut().zip(tables) {
-        t.plugin_name = n;
+    let plugins = &file.settings.plugins;
+    for d in &mut file.plugin_data {
+        if let Some(p) = plugins.iter().find(|p| p.id == d.plugin) {
+            d.plugin_name = p.name.clone();
+        }
     }
 }
 

@@ -15,10 +15,30 @@ Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
   polysurfaces (Breps, Rhino 2's layout included), surfaces, extrusions (mitered ends too) and
   SubD objects (their limit surface). Curves become polylines, texts are set in a font at their
   dimension style's height and model space scale, hatches are filled or drawn in their pattern's
-  lines. Dimensions (linear, aligned, angular, radius, diameter, ordinate), centre marks and
+  lines (with Rhino 8's background fill behind them and their boundary when the hatch has them).
+  Linetypes come with Rhino 8's width (and its unit), cap, join and taper; each curve has its
+  `stroke` (that width, also in model units, cap, join, taper and its print width and colour) so
+  that a program can draw wide lines. Section styles (Rhino 9's table, and the own styles of
+  layers and objects of Rhino 8) and where layers, objects and clipping planes take them from. Dimensions (linear, aligned, angular, radius, diameter, ordinate), centre marks and
   leaders are drawn as Rhino draws them: extension lines, dimension lines and arcs, arrowheads of
   the style's kind and the value formatted as the style says (lines, and meshes for arrowheads
   and text). Clipping planes come with their rectangle, plane, depth, the objects they clip
+  (selective clipping) and the viewports they clip, and the file's views with them.
+- The document settings: the earth anchor point (latitude, longitude, elevation, model point,
+  north and east) and the model base point, for georeferencing; named and view construction
+  planes, render, analysis and custom mesh settings, grid defaults, render settings, the current
+  layer, material, linetype, styles and colour, the model URL and the plug-in list. Also the
+  history records (command, the objects they link, their values), the document user text, the
+  named layer states and snapshots, and every plug-in's table as stored; the font of each text,
+  dimension and leader (of its first character) and of each dimension style, and the font table
+  of Rhino 4 and 5 files. Texts are still set in the one font they are given.
+- Rendering: the render settings (image size, ambient and background colours, background style
+  and wallpaper, the environments of the background, reflections and skylight) with the parts of
+  the RDK document (ground plane, sun by hand or by date, time and place, skylight, linear
+  workflow, dithering, safe frame, post effects, render channels); every render material,
+  environment and texture with its parameters, and which material, layer and object uses which;
+  the decals and mesh modifiers (displacement, edge softening, thickening, curve piping, shut
+  lining) of objects. The meshes are not changed by them.
   (selective clipping) and the viewports they clip, and the file's views with them. Cages and
   morph controls are drawn as their control nets (cages with their faces), with their
   parameters; curves along polysurface edges along those edges.
@@ -73,10 +93,11 @@ threedm_free(info);
 threedm_close(doc);
 ```
 
-Requests: `info`, `layers`, `materials`, `blocks`, `objects` (with `limit` and `offset`),
-`object` (by `id`, with its geometry and plug-in data), `plugins` (plug-in list, user tables,
-document user text) and `plugin_data` (every user data entry, with `"bytes": true` its bytes as
-base64); see `crates/threedm-ffi/src/lib.rs`.
+Requests: `info`, `layers`, `materials`, `blocks`, `lights`, `render_content`, `objects` (with `limit` and `offset`),
+`object` (by `id`, with its geometry and plug-in data), `settings`, `history`, `plugins` (plug-in
+list, user tables with what is decoded of them, document user text) and `plugin_data` (every user
+data entry, with `"bytes": true` its bytes as base64); see
+`crates/threedm-ffi/src/lib.rs`.
 
 From the command line:
 

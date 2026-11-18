@@ -621,7 +621,7 @@ fn draw_v5(kind: u32, origin: DVec3, x: DVec3, y: DVec3, points: &[DVec2], text:
     let h_align = if justification & 2 != 0 { 1 } else if justification & 4 != 0 { 2 } else { 0 };
     let v_align = if justification & 0x40000 != 0 { 0 } else if justification & 0x20000 != 0 { 3 } else { 5 };
     let text = super::drafting::plain_text(text);
-    let a = Annotation { text, rotation: 0.0, h_align, v_align, style: Uuid::default(), origin, x, y, kind, own_style: Some(style), allow_scaling: false };
+    let a = Annotation { text, rich: String::new(), rotation: 0.0, h_align, v_align, style: Uuid::default(), origin, x, y, kind, own_style: Some(style), allow_scaling: false };
     let mut pen = Pen::new(&a, &[], font, meters);
     let p = |k: usize| points.get(k).copied();
     let no_flip = Head { use_default_text_point: true, user_text_point: DVec2::ZERO, flip_arrows: [false; 2] };
