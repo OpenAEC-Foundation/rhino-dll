@@ -322,7 +322,7 @@ pub struct Attributes {
     pub clipping_label: u8,
     /// Its decals.
     pub decals: Vec<Decal>,
-    /// Its mesh modifiers (only read: its meshes are as stored).
+    /// Its mesh modifiers; the reader applies them (see `Object::unmodified`).
     pub mesh_modifiers: MeshModifiers,
 }
 
@@ -538,6 +538,9 @@ pub struct Object<'a> {
     pub stroke: Option<Stroke>,
     /// The font of a text, dimension or leader: of its first character as Rhino gives it.
     pub font: Option<Font>,
+    /// The geometry as stored, when its mesh modifiers changed [`Object::geometry`] into what
+    /// Rhino shows (a piped curve, a thickened surface, ..); `None` when they did not.
+    pub unmodified: Option<Geometry<'a>>,
 }
 
 /// A Rhino file as read.
@@ -603,6 +606,9 @@ pub struct File<'a> {
     /// The segments of curves along polysurface edges (`ON_PolyEdgeCurve`), by their object's
     /// place in [`File::objects`].
     pub poly_edges: Vec<(usize, Vec<PolyEdgeSegment>)>,
+    /// Mesh modifiers that are on but not applied, by why ("displacement without its
+    /// texture", ..): those objects are shown as stored.
+    pub unapplied_modifiers: BTreeMap<&'static str, usize>,
 }
 
 /// Who a piece of plug-in data belongs to.

@@ -1006,7 +1006,7 @@ fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize, drafting: &Drafting) ->
         None => Geometry::Skipped("empty objects"),
     };
     (attributes.decals, attributes.mesh_modifiers) = (decals, modifiers);
-    Ok(RhinoObject { geometry, attributes, user, stroke: None, font })
+    Ok(RhinoObject { geometry, attributes, user, stroke: None, font, unmodified: None })
 }
 
 /// `ON_3dmObjectAttributes`: the item list of Rhino 5 and later, or the fixed layout before.

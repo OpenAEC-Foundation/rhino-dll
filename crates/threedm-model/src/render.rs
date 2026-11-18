@@ -402,7 +402,7 @@ pub struct Decal {
 }
 
 /// The mesh modifiers of an object (`ON_MeshModifiers`): what Rhino changes its render mesh
-/// with. Only read: the meshes are not changed.
+/// with. The reader applies them to the object's geometry (`threedm_read::modifiers`).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MeshModifiers {
     pub displacement: Option<Displacement>,
