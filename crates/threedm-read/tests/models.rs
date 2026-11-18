@@ -643,3 +643,17 @@ fn the_detail_of_the_opennurbs_v5_example_is_read() {
     assert!(lo.distance(DVec3::new(10.0, 10.0, 0.0)) < 1e-9 && hi.distance(DVec3::new(205.9, 269.4, 0.0)) < 1e-9, "{lo} {hi}");
     assert_eq!((view.name.as_str(), view.perspective, *locked, *scale), ("Top", false, false, Some(1.2249496764269077)));
 }
+
+/// The units of the layouts (`page_units.3dm`, from make_page_units.py): a model in metres
+/// whose layouts are in inches, as Rhino 9 reads it (`page_units.json`); a file that does not
+/// say has the model's units on its layouts.
+#[test]
+fn layouts_have_their_own_units() {
+    let data = load("page_units.3dm");
+    let file = read(&data).unwrap();
+    assert_eq!((file.unit, file.page_unit), ("metres", "inches"));
+    assert_eq!((file.meters, file.page_meters), (1.0, 0.0254));
+    let data = load("layouts.3dm");
+    let file = read(&data).unwrap();
+    assert_eq!((file.unit, file.page_unit), ("millimetres", "millimetres"));
+}

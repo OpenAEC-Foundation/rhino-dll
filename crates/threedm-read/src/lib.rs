@@ -228,6 +228,9 @@ fn read_properties(mut c: Cur<'_>, file: &mut File<'_>) {
 const TCODE_SETTINGS_ANNOTATION: u32 = 0x2000_8034;
 /// `TCODE_SETTINGS_VIEW_LIST`: the views of the model's viewports, the active one first.
 const TCODE_SETTINGS_VIEW_LIST: u32 = 0x2000_8037;
+/// `TCODE_SETTINGS_ATTRIBUTES`: the document's settings attributes; from 1.1 the units of the
+/// layouts.
+const TCODE_SETTINGS_ATTRIBUTES: u32 = 0x2000_8134;
 /// `TCODE_SETTINGS_NAMED_VIEW_LIST`: the views saved by name, as the view list.
 const TCODE_SETTINGS_NAMED_VIEW_LIST: u32 = 0x2000_8036;
 const TCODE_VIEW_RECORD: u32 = 0x2000_803B;
@@ -252,6 +255,15 @@ fn read_settings(mut c: Cur<'_>, file: &mut File<'_>, drafting: &mut Drafting) {
                 if let Ok(Some((meters, unit))) = read_units(chunk.body) {
                     file.meters = meters;
                     file.unit = unit;
+                    // the page's units are the model's until the settings attributes say
+                    if file.page_unit.is_empty() {
+                        (file.page_meters, file.page_unit) = (meters, unit);
+                    }
+                }
+            }
+            TCODE_SETTINGS_ATTRIBUTES => {
+                if let Ok(Some((meters, unit))) = read_page_units(chunk.body) {
+                    (file.page_meters, file.page_unit) = (meters, unit);
                 }
             }
             TCODE_SETTINGS_VIEW_LIST => {
@@ -358,6 +370,19 @@ fn read_viewport(mut c: Cur<'_>) -> R<View> {
     let perspective = projection == 2;
     let fov_y = if perspective && near > 0.0 { 2.0 * (0.5 * (top - bottom) / near).atan() } else { 0.0 };
     Ok(View { id, name: String::new(), perspective, location, direction: direction.normalize_or_zero(), up: up.normalize_or_zero(), fov_y, height: top - bottom, page: None })
+}
+
+/// The page units of `ON_3dmSettings`' attributes (version 1.1 and later): after the linetype
+/// display scale, the current plot colour and its source, the current linetype and its
+/// source, a chunk with `ON_3dmUnitsAndTolerances`.
+fn read_page_units(mut c: Cur<'_>) -> R<Option<(f64, &'static str)>> {
+    let (major, minor) = c.version()?;
+    if major != 1 || minor < 1 {
+        return Ok(None);
+    }
+    c.take(8 + 4 + 4 + 4 + 4)?;
+    let (units, _, _) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
+    read_units(units)
 }
 
 /// `ON_3dmUnitsAndTolerances`: the length unit, as metres per unit and its name.

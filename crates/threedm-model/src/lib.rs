@@ -371,6 +371,10 @@ pub struct File<'a> {
     /// Metres per model unit, and the unit's name.
     pub meters: f64,
     pub unit: &'static str,
+    /// Metres per unit of the layouts (page space), and its name: the model's unless the file
+    /// says otherwise.
+    pub page_meters: f64,
+    pub page_unit: &'static str,
     pub layers: Vec<Layer>,
     pub materials: Vec<Material>,
     /// The bitmap table: images embedded in the file.

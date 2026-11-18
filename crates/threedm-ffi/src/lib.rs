@@ -204,6 +204,8 @@ fn answer(file: &File<'_>, request: &str) -> Result<Value, String> {
                 "application": file.application,
                 "unit": file.unit,
                 "meters_per_unit": file.meters,
+                "page_unit": file.page_unit,
+                "page_meters_per_unit": file.page_meters,
                 "layers": file.layers.len(),
                 "materials": file.materials.len(),
                 "bitmaps": file.bitmaps.len(),
