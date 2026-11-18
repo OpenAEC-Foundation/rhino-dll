@@ -654,10 +654,17 @@ fn read_material(object: Object<'_>, index: i32) -> R<Material> {
             color[3] = 0;
         }
         m.textures = read_textures(&mut b)?;
-        // material channels, shareable, lighting, Fresnel and glossiness, then the render material
-        let channels = b.count(20)?;
-        b.take(20 * channels + 3 + 3 * 8)?;
-        m.render_material = b.uuid()?;
+        // material channels, shareable, lighting, Fresnel and glossiness, then the render material;
+        // a record that ends before them keeps what it has
+        let mut rest = || -> R<Uuid> {
+            let channels = b.count(20)?;
+            b.take(20 * channels + 3 + 3 * 8)?;
+            b.uuid()
+        };
+        m.render_material = rest().unwrap_or_default();
+        if m.render_material.is_nil() {
+            m.render_material = render::obsolete_material_instance(&object.userdata).unwrap_or_default();
+        }
         return Ok(m);
     }
     let (major, minor) = c.version()?;
