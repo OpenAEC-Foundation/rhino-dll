@@ -3,7 +3,7 @@
 Rust library (and DLL) that reads Rhino `.3dm` files without Rhino, for use by
 [Open BIM Suite](https://github.com/OpenAEC-Foundation/open-bim-suite) and other tools.
 
-**Status:** private, alpha. Reads every Rhino version from Rhino 1 to Rhino 9.
+**Status:** alpha. Reads every Rhino version from Rhino 1 to Rhino 9.
 
 ## Scope
 
